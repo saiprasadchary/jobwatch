@@ -99,13 +99,44 @@ def _should_requeue_job(
     incoming_posted = _parse_timestamp(incoming_posted_at)
     if not incoming_posted:
         return False
-    if incoming_posted < datetime.now(timezone.utc) - timedelta(days=3):
+    # Only requeue genuinely fresh postings (48h).  ATS platforms like Workday
+    # and Phenom recalculate relative timestamps each scrape ("Posted 2 days
+    # ago" → "Posted 3 days ago"), so a 3-day window caused false requeues.
+    if incoming_posted < datetime.now(timezone.utc) - timedelta(hours=48):
         return False
 
     existing_posted = _parse_timestamp(existing_posted_at)
-    if existing_posted and incoming_posted <= existing_posted + timedelta(hours=1):
+    # Tolerate up to 24h of drift — relative-date ATS timestamps can shift by
+    # a full calendar day between scrapes without representing a real repost.
+    if existing_posted and incoming_posted <= existing_posted + timedelta(hours=24):
         return False
     return True
+
+
+def cleanup_old_jobs(retention_days: int = 30) -> int:
+    """Delete stale jobs and source_runs older than *retention_days*.
+
+    Only jobs with status ``'new'`` are removed — applied / interview / offer
+    rows are kept regardless of age.  Old ``source_runs`` entries are pruned in
+    the same transaction.
+
+    Returns the total number of deleted rows (seen_jobs + source_runs).
+    """
+    conn = _connect()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+
+    cur_jobs = conn.execute(
+        "DELETE FROM seen_jobs WHERE last_seen < ? AND status = 'new'",
+        (cutoff,),
+    )
+    cur_runs = conn.execute(
+        "DELETE FROM source_runs WHERE run_at < ?",
+        (cutoff,),
+    )
+    deleted = cur_jobs.rowcount + cur_runs.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 def sync_jobs(jobs: list[dict]) -> list[dict]:
@@ -207,6 +238,49 @@ def sync_jobs(jobs: list[dict]) -> list[dict]:
 
 def filter_new_jobs(jobs: list[dict]) -> list[dict]:
     return sync_jobs(jobs)
+
+
+def mark_jobs_pending_notification(job_ids: Iterable[str]) -> int:
+    """Set ``notified_at`` to the sentinel ``'pending'`` BEFORE sending email.
+
+    This prevents duplicate alerts when the process crashes between sending and
+    marking.  After a successful send, call :func:`mark_jobs_notified` to stamp
+    the real timestamp (it overwrites ``'pending'``).  If the send fails, call
+    :func:`reset_pending_notifications` to set ``'pending'`` back to NULL so the
+    jobs are retried on the next run.
+    """
+    ids = list(dict.fromkeys(job_ids))
+    if not ids:
+        return 0
+
+    conn = _connect()
+    placeholders = ",".join("?" for _ in ids)
+    cur = conn.execute(
+        f"UPDATE seen_jobs SET notified_at = 'pending' WHERE job_id IN ({placeholders})",
+        ids,
+    )
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return updated
+
+
+def reset_pending_notifications() -> int:
+    """Reset any ``notified_at = 'pending'`` rows back to NULL.
+
+    Call this when email delivery fails so the jobs are picked up again on the
+    next pipeline run.
+
+    Returns the number of rows reset.
+    """
+    conn = _connect()
+    cur = conn.execute(
+        "UPDATE seen_jobs SET notified_at = NULL WHERE notified_at = 'pending'",
+    )
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return updated
 
 
 def mark_jobs_notified(job_ids: Iterable[str]) -> int:

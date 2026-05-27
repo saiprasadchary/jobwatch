@@ -15,13 +15,16 @@ from filters import filter_jobs
 from ranking import rank_jobs
 from store import (
     VALID_STATUSES,
+    cleanup_old_jobs,
     detect_source_anomalies,
     get_stats,
     get_status_summary,
     get_recent_source_health,
     mark_jobs_notified,
+    mark_jobs_pending_notification,
     mark_status,
     record_source_results,
+    reset_pending_notifications,
     search_jobs,
     sync_jobs,
 )
@@ -360,6 +363,9 @@ def cmd_run(args):
         print(f"\nRecorded source health for {recorded_sources} source(s).")
 
     if pending_jobs:
+        pending_ids = [job["job_id"] for job in pending_jobs]
+        mark_jobs_pending_notification(pending_ids)
+
         email_jobs = _select_email_jobs(pending_jobs, config)
         subject = build_subject(email_jobs or pending_jobs, config)
         try:
@@ -370,7 +376,7 @@ def cmd_run(args):
                 delivery_message = "No instant-alert tier roles this run; pending roles were archived in the workflow inbox."
 
             if sent:
-                mark_jobs_notified(job["job_id"] for job in pending_jobs)
+                mark_jobs_notified(pending_ids)
                 record_batch(
                     status="sent" if email_jobs else "inbox_only",
                     jobs=pending_jobs,
@@ -380,6 +386,7 @@ def cmd_run(args):
                 print(f"\n{delivery_message}")
             else:
                 delivery_error = delivery_message
+                reset_pending_notifications()
                 record_batch(
                     status="pending_delivery",
                     jobs=pending_jobs,
@@ -390,6 +397,7 @@ def cmd_run(args):
                 print(f"\n{delivery_error}")
         except Exception as e:
             delivery_error = f"Email failed: {e}"
+            reset_pending_notifications()
             record_batch(
                 status="delivery_failed",
                 jobs=pending_jobs,
@@ -401,6 +409,11 @@ def cmd_run(args):
 
     inbox_path = render_inbox(config=config)
     print(f"\nWorkflow inbox updated: {inbox_path}")
+
+    cleaned = cleanup_old_jobs()
+    if cleaned:
+        print(f"Cleaned up {cleaned} job(s) older than 30 days.")
+
     _print_health_summary(results)
     _print_health_anomalies(health_anomalies)
 
