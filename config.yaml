@@ -1,0 +1,317 @@
+keywords:
+  - Software Engineer
+  - Software Development Engineer
+  - Software Development
+  - Software Developer
+  - Staff Software
+  - Senior Software
+  - Full Stack
+  - Fullstack
+  - Backend Engineer
+  - Backend Developer
+  - Frontend Engineer
+  - AI Engineer
+  - ML Engineer
+  - Machine Learning Engineer
+  - Platform Engineer
+  - Cloud Engineer
+  - Infrastructure Engineer
+  - Java Developer
+  - Python Developer
+  - Data Engineer
+  - DevOps Engineer
+  - Research Engineer
+  - Site Reliability
+  - SRE
+  - Solutions Engineer
+  - Application Engineer
+  - Applications Engineer
+  - Member of Technical Staff
+  - MTS
+  - FDE
+  - Engineer II
+  - Engineer III
+  - Developer II
+  - Developer III
+
+# Non-US locations are auto-filtered (India, UK, etc.)
+# Additional location allowlist (empty = accept all US locations):
+locations: []
+
+runner:
+  fast_workers: 8
+  browser_workers: 1
+  fast_timeout_seconds: 150
+  browser_timeout_seconds: 210
+
+alerting:
+  # Top/Strong roles interrupt via Gmail. Watch roles still land in workflow inbox
+  # and are marked seen so they do not keep repeating every run.
+  email_bands:
+    - Top
+    - Strong
+
+companies:
+  # --- Greenhouse (Phase 1) ---
+  - name: Okta
+    ats: greenhouse
+    slug: okta
+
+  # --- Lever (Phase 1) ---
+  - name: Palantir
+    ats: lever
+    slug: palantir
+
+  # --- Ashby (Phase 1) ---
+  - name: Snowflake
+    ats: ashby
+    slug: snowflake
+
+  # --- SmartRecruiters (Phase 1) ---
+  - name: ServiceNow
+    ats: smartrecruiters
+    slug: ServiceNow
+
+  - name: Complian
+    ats: smartrecruiters
+    slug: complian
+
+  # --- Workday (Phase 2) ---
+  - name: Salesforce
+    ats: workday
+    tenant: salesforce.wd12
+    site: External_Career_Site
+
+  - name: Palo Alto Networks
+    ats: workday
+    tenant: paloaltonetworks.wd5
+    site: panwexternalcareers
+
+  - name: Nordstrom
+    ats: workday
+    tenant: nordstrom.wd501
+    site: nordstrom_careers
+
+  # --- TalentBrew/Radancy (Arm uses this on top of iCIMS) ---
+  - name: Arm
+    ats: talentbrew
+    domain: careers.arm.com
+
+  # --- ICE (iCIMS/Jibe — not yet supported, needs scraper) ---
+  # - name: ICE
+  #   ats: icims
+  #   board: ice-careers
+
+  # --- Eightfold (needs Playwright — CSRF-gated API) ---
+  # - name: Applied Materials
+  #   ats: eightfold
+  #   domain: appliedmaterials.com
+
+  # --- Oleeo (Phase 3) ---
+  - name: Morgan Stanley
+    ats: oleeo
+    subdomain: morganstanley
+
+  # --- HN Who's Hiring (monthly thread) ---
+  - name: HN Who's Hiring
+    ats: hn_hiring
+
+  # ══════════════════════════════════════════════
+  #  NEWLY ADDED — Big Tech & Growth Companies
+  # ══════════════════════════════════════════════
+
+  # --- Greenhouse ---
+  - name: Databricks
+    ats: greenhouse
+    slug: databricks
+
+  - name: Datadog
+    ats: greenhouse
+    slug: datadog
+
+  - name: Stripe
+    ats: greenhouse
+    slug: stripe
+
+  - name: Cloudflare
+    ats: greenhouse
+    slug: cloudflare
+
+  - name: MongoDB
+    ats: greenhouse
+    slug: mongodb
+
+  - name: Elastic
+    ats: greenhouse
+    slug: elastic
+
+  - name: Twilio
+    ats: greenhouse
+    slug: twilio
+
+  - name: Vercel
+    ats: greenhouse
+    slug: vercel
+
+  - name: Robinhood
+    ats: greenhouse
+    slug: robinhood
+
+  - name: Block
+    ats: greenhouse
+    slug: block
+
+  - name: Lyft
+    ats: greenhouse
+    slug: lyft
+
+  - name: Airbnb
+    ats: greenhouse
+    slug: airbnb
+
+  - name: Pinterest
+    ats: greenhouse
+    slug: pinterest
+
+  - name: Reddit
+    ats: greenhouse
+    slug: reddit
+
+  - name: Figma
+    ats: greenhouse
+    slug: figma
+
+  - name: Rubrik
+    ats: greenhouse
+    slug: rubrik
+
+  # --- Ashby ---
+  - name: Confluent
+    ats: ashby
+    slug: confluent
+
+  - name: Notion
+    ats: ashby
+    slug: notion
+
+  - name: Linear
+    ats: ashby
+    slug: linear
+
+  # --- SmartRecruiters ---
+  - name: Visa
+    ats: smartrecruiters
+    slug: visa
+
+  # --- Workday ---
+  - name: Adobe
+    ats: workday
+    tenant: adobe.wd5
+    site: external_experienced
+
+  - name: Capital One
+    ats: workday
+    tenant: capitalone.wd12
+    site: Capital_One
+
+  - name: Comcast
+    ats: workday
+    tenant: comcast.wd5
+    site: Comcast_Careers
+
+  - name: NXP
+    ats: workday
+    tenant: nxp.wd3
+    site: careers
+
+  - name: Fidelity
+    ats: workday
+    tenant: fmr.wd1
+    site: FidelityCareers
+
+  # --- Phenom ---
+  - name: AMD
+    ats: phenom
+    domain: careers.amd.com
+
+  # --- Amazon (dedicated JSON API) ---
+  - name: Amazon
+    ats: amazon
+
+  # --- Playwright-powered (JS-rendered career pages) ---
+  - name: Google
+    ats: playwright
+    slug: google
+
+  - name: Apple
+    ats: playwright
+    slug: apple
+
+  - name: Netflix
+    ats: playwright
+    slug: netflix
+
+  - name: Meta
+    ats: playwright
+    slug: meta
+
+  - name: Microsoft
+    ats: playwright
+    slug: microsoft
+
+  - name: Uber
+    ats: playwright
+    slug: uber
+
+  - name: DoorDash
+    ats: playwright
+    slug: doordash
+
+  - name: Goldman Sachs
+    ats: playwright
+    slug: goldman_sachs
+
+  - name: Intuit
+    ats: playwright
+    slug: intuit
+
+  - name: Cisco
+    ats: playwright
+    slug: cisco
+
+  - name: Bloomberg
+    ats: playwright
+    slug: bloomberg
+
+  - name: Tesla
+    ats: playwright
+    slug: tesla
+
+  - name: PayPal
+    ats: playwright
+    slug: paypal
+
+  - name: Atlassian
+    ats: playwright
+    slug: atlassian
+
+  # --- Not yet supported (Oracle HCM REST API — needs dedicated adapter) ---
+  # - name: JP Morgan     # jpmc.fa.oraclecloud.com
+  # - name: Oracle        # eeho.fa.us2.oraclecloud.com
+  # - name: FICO          # Heavy bot protection
+
+notification:
+  # Recipient defaults to JOBWATCH_EMAIL_USER if not set here.
+  # Override with JOBWATCH_NOTIFY_EMAIL env var or uncomment below:
+  # email: your_email@example.com
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  subject_prefix: "[JobWatch Inbox]"
+  # Set these environment variables:
+  #   JOBWATCH_EMAIL_USER=your_gmail@gmail.com
+  #   JOBWATCH_EMAIL_PASSWORD=your_16_char_app_password
+  #   JOBWATCH_NOTIFY_EMAIL=recipient@example.com  (optional, defaults to EMAIL_USER)
+
+ranking:
+  top_picks: 5
+  preferred_companies: []

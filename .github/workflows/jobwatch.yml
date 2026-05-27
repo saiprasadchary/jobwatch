@@ -1,0 +1,154 @@
+name: JobWatch - Career Page Monitor
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'    # Fast ATS/API lane every 30 minutes
+    - cron: '17 */4 * * *'    # Browser lane every 4 hours, offset from fast lane
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: JobWatch lane to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - fast
+          - browser
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: jobwatch-state
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: job-watch
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Choose JobWatch lane
+        id: lane
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            lane="${{ inputs.lane }}"
+          elif [ "${{ github.event.schedule }}" = "17 */4 * * *" ]; then
+            lane="browser"
+          else
+            lane="fast"
+          fi
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "Running JobWatch lane: $lane"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          if [ "${{ steps.lane.outputs.lane }}" != "fast" ]; then
+            playwright install --with-deps chromium
+          fi
+
+      - name: Download H-1B sponsor data (cached)
+        uses: actions/cache@v4
+        id: h1b-cache
+        with:
+          path: job-watch/h1b_sponsors.db
+          key: h1b-sponsors-fy2026-q2
+
+      - name: Build H-1B sponsor DB if not cached
+        if: steps.h1b-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/lca.xlsx "https://www.dol.gov/media/LCA_Dislclosure_Data_FY2026_Q2.xlsx"
+          python3 << 'PYEOF'
+          import openpyxl, sqlite3
+          import re
+
+          def normalize(name: str) -> str:
+              name = name.upper().strip().replace("&", " AND ")
+              name = re.sub(r"\b(INC\.?|LLC\.?|CORP\.?|CO\.?|LTD\.?|L\.?P\.?|GROUP|SERVICES?|TECHNOLOGIES?|COMPANY|SYSTEMS?)\b", "", name)
+              name = re.sub(r"[.,'\"()/-]", " ", name)
+              return re.sub(r"\s+", " ", name).strip()
+
+          wb = openpyxl.load_workbook('/tmp/lca.xlsx', read_only=True)
+          ws = wb.active
+          sponsors = {}
+          for row in ws.iter_rows(min_row=2, values_only=True):
+              visa = str(row[5] or '')
+              status = str(row[1] or '')
+              employer = str(row[19] or '').strip()
+              if 'H-1B' in visa and status in ('Certified', 'Certified - Withdrawn') and employer:
+                  name = employer.upper().strip()
+                  sponsors[name] = sponsors.get(name, 0) + 1
+          wb.close()
+          conn = sqlite3.connect('h1b_sponsors.db')
+          conn.execute("DROP TABLE IF EXISTS sponsors")
+          conn.execute(
+              "CREATE TABLE sponsors (employer_name TEXT PRIMARY KEY, normalized_name TEXT, lca_count INTEGER)"
+          )
+          conn.executemany(
+              "INSERT INTO sponsors (employer_name, normalized_name, lca_count) VALUES (?, ?, ?)",
+              [(employer_name, normalize(employer_name), count) for employer_name, count in sponsors.items()],
+          )
+          conn.execute("CREATE INDEX idx_sponsors_normalized_name ON sponsors(normalized_name)")
+          conn.commit()
+          conn.close()
+          print(f"Built H-1B DB: {len(sponsors)} sponsors")
+          PYEOF
+
+      - name: Restore JobWatch state artifact
+        id: state-artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          restored=0
+          for run_id in $(gh run list --workflow "$GITHUB_WORKFLOW" --status success --limit 20 --json databaseId --jq '.[].databaseId'); do
+            rm -rf /tmp/jobwatch-state
+            mkdir -p /tmp/jobwatch-state
+            if gh run download "$run_id" -n jobwatch-state -D /tmp/jobwatch-state >/dev/null 2>&1; then
+              if [ -f /tmp/jobwatch-state/jobwatch.db ]; then
+                cp /tmp/jobwatch-state/jobwatch.db jobwatch.db
+                echo "Restored JobWatch DB from workflow run $run_id"
+                restored=1
+                break
+              fi
+            fi
+          done
+          if [ "$restored" -eq 0 ]; then
+            echo "No previous JobWatch state artifact found; starting with a fresh local DB."
+          fi
+          echo "restored=$restored" >> "$GITHUB_OUTPUT"
+
+      - name: Restore legacy cache during artifact migration
+        if: steps.state-artifact.outputs.restored != '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: job-watch/jobwatch.db
+          key: jobwatch-db-artifact-migration-${{ github.run_id }}
+          restore-keys: |
+            jobwatch-db-
+
+      - name: Run JobWatch
+        env:
+          JOBWATCH_EMAIL_USER: ${{ secrets.JOBWATCH_EMAIL_USER }}
+          JOBWATCH_EMAIL_PASSWORD: ${{ secrets.JOBWATCH_EMAIL_PASSWORD }}
+        run: python jobwatch.py run --lane "${{ steps.lane.outputs.lane }}"
+
+      - name: Upload JobWatch state artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobwatch-state
+          path: job-watch/jobwatch.db
+          if-no-files-found: warn
+          retention-days: 90
