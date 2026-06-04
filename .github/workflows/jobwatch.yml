@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: job-watch
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +74,7 @@ jobs:
         uses: actions/cache@v4
         id: h1b-cache
         with:
-          path: job-watch/h1b_sponsors.db
+          path: h1b_sponsors.db
           key: ${{ steps.h1b-key.outputs.key }}
 
       - name: Build H-1B sponsor DB if not cached
@@ -141,15 +141,6 @@ jobs:
           fi
           echo "restored=$restored" >> "$GITHUB_OUTPUT"
 
-      - name: Restore legacy cache during artifact migration
-        if: steps.state-artifact.outputs.restored != '1'
-        uses: actions/cache/restore@v4
-        with:
-          path: job-watch/jobwatch.db
-          key: jobwatch-db-artifact-migration-${{ github.run_id }}
-          restore-keys: |
-            jobwatch-db-
-
       - name: Run JobWatch
         env:
           JOBWATCH_EMAIL_USER: ${{ secrets.JOBWATCH_EMAIL_USER }}
@@ -162,6 +153,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jobwatch-state
-          path: job-watch/jobwatch.db
+          path: jobwatch.db
           if-no-files-found: warn
           retention-days: 90
