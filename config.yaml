@@ -248,8 +248,7 @@ companies:
     slug: apple
 
   - name: Netflix
-    ats: playwright
-    slug: netflix
+    ats: netflix
 
   - name: Meta
     ats: playwright
@@ -260,8 +259,7 @@ companies:
     slug: microsoft
 
   - name: Uber
-    ats: playwright
-    slug: uber
+    ats: uber
 
   - name: DoorDash
     ats: playwright
@@ -275,21 +273,24 @@ companies:
     ats: playwright
     slug: intuit
 
-  - name: Cisco
-    ats: playwright
-    slug: cisco
+  # DISABLED: bot protection blocks both Playwright and API access
+  # - name: Cisco
+  #   ats: playwright
+  #   slug: cisco
 
-  - name: Bloomberg
-    ats: playwright
-    slug: bloomberg
+  # DISABLED: bot protection blocks both Playwright and API access
+  # - name: Bloomberg
+  #   ats: playwright
+  #   slug: bloomberg
 
   - name: Tesla
     ats: playwright
     slug: tesla
 
   - name: PayPal
-    ats: playwright
-    slug: paypal
+    ats: workday
+    tenant: paypal.wd1
+    site: jobs
 
   - name: Atlassian
     ats: playwright
@@ -311,6 +312,9 @@ notification:
   #   JOBWATCH_EMAIL_USER=your_gmail@gmail.com
   #   JOBWATCH_EMAIL_PASSWORD=your_16_char_app_password
   #   JOBWATCH_NOTIFY_EMAIL=recipient@example.com  (optional, defaults to EMAIL_USER)
+  # Push notifications via ntfy.sh (optional — set JOBWATCH_NTFY_TOPIC env var or uncomment below)
+  # ntfy_topic: your-secret-topic-name
+  ntfy_server: https://ntfy.sh
 
 ranking:
   top_picks: 5

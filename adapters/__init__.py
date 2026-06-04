@@ -9,6 +9,8 @@ from .eightfold import fetch_eightfold
 from .hn_hiring import fetch_hn_hiring
 from .phenom import fetch_phenom
 from .amazon import fetch_amazon
+from .netflix import fetch_netflix
+from .uber import fetch_uber
 from .playwright_scraper import fetch_playwright
 
 ADAPTERS = {
@@ -23,5 +25,7 @@ ADAPTERS = {
     "hn_hiring": fetch_hn_hiring,
     "phenom": fetch_phenom,
     "amazon": fetch_amazon,
+    "netflix": fetch_netflix,
+    "uber": fetch_uber,
     "playwright": fetch_playwright,
 }

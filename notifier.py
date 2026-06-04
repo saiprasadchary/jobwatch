@@ -356,6 +356,51 @@ def send_email(new_jobs: list[dict], config: dict) -> tuple[bool, str]:
     return True, delivery_note
 
 
+def send_ntfy(email_jobs: list[dict], config: dict) -> None:
+    """Send a push notification via ntfy.sh (optional, best-effort)."""
+    try:
+        import urllib.request
+        import urllib.error
+
+        notif = config.get("notification", {})
+        topic = notif.get("ntfy_topic") or os.environ.get("JOBWATCH_NTFY_TOPIC", "")
+        if not topic:
+            return
+
+        server = notif.get("ntfy_server", "https://ntfy.sh")
+        count = len(email_jobs)
+
+        # Build numbered list, max 5 jobs
+        lines = []
+        for idx, job in enumerate(email_jobs[:5], start=1):
+            loc = job.get("location", "")
+            loc_part = f" ({loc})" if loc else ""
+            lines.append(f"{idx}. {job['company']} — {job['title']}{loc_part}")
+        if count > 5:
+            lines.append(f"... and {count - 5} more")
+        body = "\n".join(lines)
+
+        # Determine priority based on rank bands
+        has_top = any(job.get("rank_band") == "Top" for job in email_jobs)
+        priority = "4" if has_top else "3"
+
+        # First job URL for the click action
+        click_url = email_jobs[0].get("url", "") if email_jobs else ""
+
+        url = f"{server.rstrip('/')}/{topic}"
+        req = urllib.request.Request(url, data=body.encode("utf-8"), method="POST")
+        req.add_header("Title", f"JobWatch: {count} new role(s)")
+        req.add_header("Priority", priority)
+        req.add_header("Tags", "briefcase")
+        if click_url:
+            req.add_header("Click", click_url)
+
+        urllib.request.urlopen(req, timeout=10)
+        print(f"  ntfy push sent to {topic} ({count} job(s))")
+    except Exception as exc:
+        print(f"  WARNING: ntfy push failed: {exc}")
+
+
 def print_report(new_jobs: list[dict], config: dict):
     if not new_jobs:
         print("\nNo new matching roles found this run.")

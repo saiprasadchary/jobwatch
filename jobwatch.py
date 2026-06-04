@@ -28,7 +28,7 @@ from store import (
     search_jobs,
     sync_jobs,
 )
-from notifier import build_subject, send_email, print_report
+from notifier import build_subject, send_email, send_ntfy, print_report
 from workflow_inbox import print_summary, record_batch, render_inbox
 
 BROWSER_ATS = {"playwright"}
@@ -406,6 +406,9 @@ def cmd_run(args):
                 error=delivery_error,
             )
             print(f"\n{delivery_error}")
+
+        if email_jobs:
+            send_ntfy(email_jobs, config)
 
     inbox_path = render_inbox(config=config)
     print(f"\nWorkflow inbox updated: {inbox_path}")

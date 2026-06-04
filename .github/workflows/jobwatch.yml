@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: .
+        working-directory: job-watch
 
     steps:
       - uses: actions/checkout@v4
@@ -58,17 +58,29 @@ jobs:
             playwright install --with-deps chromium
           fi
 
+      - name: Compute H-1B fiscal quarter
+        id: h1b-key
+        run: |
+          month=$(date +%m)
+          year=$(date +%Y)
+          if [ "$month" -ge 10 ]; then fy=$((year + 1)); else fy=$year; fi
+          case $month in
+            10|11|12) q=1 ;; 01|02|03) q=2 ;; 04|05|06) q=3 ;; 07|08|09) q=4 ;;
+          esac
+          echo "key=h1b-sponsors-fy${fy}-q${q}" >> "$GITHUB_OUTPUT"
+          echo "url=https://www.dol.gov/media/LCA_Dislclosure_Data_FY${fy}_Q${q}.xlsx" >> "$GITHUB_OUTPUT"
+
       - name: Download H-1B sponsor data (cached)
         uses: actions/cache@v4
         id: h1b-cache
         with:
-          path: h1b_sponsors.db
-          key: h1b-sponsors-fy2026-q2
+          path: job-watch/h1b_sponsors.db
+          key: ${{ steps.h1b-key.outputs.key }}
 
       - name: Build H-1B sponsor DB if not cached
         if: steps.h1b-cache.outputs.cache-hit != 'true'
         run: |
-          curl -L -o /tmp/lca.xlsx "https://www.dol.gov/media/LCA_Dislclosure_Data_FY2026_Q2.xlsx"
+          curl -L -o /tmp/lca.xlsx "${{ steps.h1b-key.outputs.url }}"
           python3 << 'PYEOF'
           import openpyxl, sqlite3
           import re
@@ -129,10 +141,20 @@ jobs:
           fi
           echo "restored=$restored" >> "$GITHUB_OUTPUT"
 
+      - name: Restore legacy cache during artifact migration
+        if: steps.state-artifact.outputs.restored != '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: job-watch/jobwatch.db
+          key: jobwatch-db-artifact-migration-${{ github.run_id }}
+          restore-keys: |
+            jobwatch-db-
+
       - name: Run JobWatch
         env:
           JOBWATCH_EMAIL_USER: ${{ secrets.JOBWATCH_EMAIL_USER }}
           JOBWATCH_EMAIL_PASSWORD: ${{ secrets.JOBWATCH_EMAIL_PASSWORD }}
+          JOBWATCH_NTFY_TOPIC: ${{ secrets.JOBWATCH_NTFY_TOPIC }}
         run: python jobwatch.py run --lane "${{ steps.lane.outputs.lane }}"
 
       - name: Upload JobWatch state artifact
@@ -140,6 +162,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jobwatch-state
-          path: jobwatch.db
+          path: job-watch/jobwatch.db
           if-no-files-found: warn
           retention-days: 90
