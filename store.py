@@ -85,6 +85,11 @@ def _connect():
     return conn
 
 
+def _in_clause(ids: list[str]) -> str:
+    """Build a parameterised IN-clause placeholder string."""
+    return ",".join("?" for _ in ids)
+
+
 def _should_requeue_job(
     incoming_posted_at: str,
     existing_posted_at: str | None,
@@ -101,12 +106,12 @@ def _should_requeue_job(
         return False
     # Only requeue genuinely fresh postings (48h).  ATS platforms like Workday
     # and Phenom recalculate relative timestamps each scrape ("Posted 2 days
-    # ago" → "Posted 3 days ago"), so a 3-day window caused false requeues.
+    # ago" -> "Posted 3 days ago"), so a 3-day window caused false requeues.
     if incoming_posted < datetime.now(timezone.utc) - timedelta(hours=48):
         return False
 
     existing_posted = _parse_timestamp(existing_posted_at)
-    # Tolerate up to 24h of drift — relative-date ATS timestamps can shift by
+    # Tolerate up to 24h of drift -- relative-date ATS timestamps can shift by
     # a full calendar day between scrapes without representing a real repost.
     if existing_posted and incoming_posted <= existing_posted + timedelta(hours=24):
         return False
@@ -116,124 +121,121 @@ def _should_requeue_job(
 def cleanup_old_jobs(retention_days: int = 30) -> int:
     """Delete stale jobs and source_runs older than *retention_days*.
 
-    Only jobs with status ``'new'`` are removed — applied / interview / offer
+    Only jobs with status ``'new'`` are removed -- applied / interview / offer
     rows are kept regardless of age.  Old ``source_runs`` entries are pruned in
     the same transaction.
 
     Returns the total number of deleted rows (seen_jobs + source_runs).
     """
-    conn = _connect()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
-
-    cur_jobs = conn.execute(
-        "DELETE FROM seen_jobs WHERE last_seen < ? AND status = 'new'",
-        (cutoff,),
-    )
-    cur_runs = conn.execute(
-        "DELETE FROM source_runs WHERE run_at < ?",
-        (cutoff,),
-    )
-    deleted = cur_jobs.rowcount + cur_runs.rowcount
-    conn.commit()
-    conn.close()
-    return deleted
+    with _connect() as conn:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        cur_jobs = conn.execute(
+            "DELETE FROM seen_jobs WHERE last_seen < ? AND status = 'new'",
+            (cutoff,),
+        )
+        cur_runs = conn.execute(
+            "DELETE FROM source_runs WHERE run_at < ?",
+            (cutoff,),
+        )
+        deleted = cur_jobs.rowcount + cur_runs.rowcount
+        conn.commit()
+        return deleted
 
 
 def sync_jobs(jobs: list[dict]) -> list[dict]:
-    conn = _connect()
-    cur = conn.cursor()
-    pending = []
-    seen_job_ids: set[str] = set()
-    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        cur = conn.cursor()
+        pending = []
+        seen_job_ids: set[str] = set()
+        now = datetime.now(timezone.utc).isoformat()
 
-    for job in jobs:
-        job_id = job["job_id"]
-        if job_id in seen_job_ids:
-            continue
-        seen_job_ids.add(job_id)
+        for job in jobs:
+            job_id = job["job_id"]
+            if job_id in seen_job_ids:
+                continue
+            seen_job_ids.add(job_id)
 
-        location = job.get("location", "")
-        url = job.get("url", "")
-        posted_at = job.get("posted_at", "")
-        source = job.get("source", "")
-        salary = job.get("salary", "")
+            location = job.get("location", "")
+            url = job.get("url", "")
+            posted_at = job.get("posted_at", "")
+            source = job.get("source", "")
+            salary = job.get("salary", "")
 
-        cur.execute(
-            "SELECT first_seen, notified_at, posted_at, status FROM seen_jobs WHERE job_id = ?",
-            (job_id,),
-        )
-        existing = cur.fetchone()
-        if existing is None:
-            pending.append({**job, "first_seen": now, "last_seen": now})
+            cur.execute(
+                "SELECT first_seen, notified_at, posted_at, status FROM seen_jobs WHERE job_id = ?",
+                (job_id,),
+            )
+            existing = cur.fetchone()
+            if existing is None:
+                pending.append({**job, "first_seen": now, "last_seen": now})
+                cur.execute(
+                    """
+                    INSERT INTO seen_jobs (
+                        job_id,
+                        company,
+                        title,
+                        location,
+                        url,
+                        first_seen,
+                        status,
+                        posted_at,
+                        source,
+                        salary,
+                        last_seen,
+                        notified_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        job_id,
+                        job["company"],
+                        job["title"],
+                        location,
+                        url,
+                        now,
+                        posted_at,
+                        source,
+                        salary,
+                        now,
+                    ),
+                )
+                continue
+
+            should_requeue = _should_requeue_job(posted_at, existing[2], existing[1], existing[3])
+
             cur.execute(
                 """
-                INSERT INTO seen_jobs (
-                    job_id,
-                    company,
-                    title,
-                    location,
-                    url,
-                    first_seen,
-                    status,
-                    posted_at,
-                    source,
-                    salary,
-                    last_seen,
-                    notified_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, NULL)
+                UPDATE seen_jobs
+                SET company = ?,
+                    title = ?,
+                    location = COALESCE(NULLIF(?, ''), location),
+                    url = COALESCE(NULLIF(?, ''), url),
+                    posted_at = COALESCE(NULLIF(?, ''), posted_at),
+                    source = COALESCE(NULLIF(?, ''), source),
+                    salary = COALESCE(NULLIF(?, ''), salary),
+                    last_seen = ?,
+                    notified_at = CASE WHEN ? THEN NULL ELSE notified_at END
+                WHERE job_id = ?
                 """,
                 (
-                    job_id,
                     job["company"],
                     job["title"],
                     location,
                     url,
-                    now,
                     posted_at,
                     source,
                     salary,
                     now,
+                    1 if should_requeue else 0,
+                    job_id,
                 ),
             )
-            continue
 
-        should_requeue = _should_requeue_job(posted_at, existing[2], existing[1], existing[3])
+            if existing[1] is None or should_requeue:
+                pending.append({**job, "first_seen": existing[0], "last_seen": now})
 
-        cur.execute(
-            """
-            UPDATE seen_jobs
-            SET company = ?,
-                title = ?,
-                location = COALESCE(NULLIF(?, ''), location),
-                url = COALESCE(NULLIF(?, ''), url),
-                posted_at = COALESCE(NULLIF(?, ''), posted_at),
-                source = COALESCE(NULLIF(?, ''), source),
-                salary = COALESCE(NULLIF(?, ''), salary),
-                last_seen = ?,
-                notified_at = CASE WHEN ? THEN NULL ELSE notified_at END
-            WHERE job_id = ?
-            """,
-            (
-                job["company"],
-                job["title"],
-                location,
-                url,
-                posted_at,
-                source,
-                salary,
-                now,
-                1 if should_requeue else 0,
-                job_id,
-            ),
-        )
-
-        if existing[1] is None or should_requeue:
-            pending.append({**job, "first_seen": existing[0], "last_seen": now})
-
-    conn.commit()
-    conn.close()
-    return pending
+        conn.commit()
+        return pending
 
 
 def filter_new_jobs(jobs: list[dict]) -> list[dict]:
@@ -253,16 +255,13 @@ def mark_jobs_pending_notification(job_ids: Iterable[str]) -> int:
     if not ids:
         return 0
 
-    conn = _connect()
-    placeholders = ",".join("?" for _ in ids)
-    cur = conn.execute(
-        f"UPDATE seen_jobs SET notified_at = 'pending' WHERE job_id IN ({placeholders})",
-        ids,
-    )
-    conn.commit()
-    updated = cur.rowcount
-    conn.close()
-    return updated
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE seen_jobs SET notified_at = 'pending' WHERE job_id IN ({_in_clause(ids)})",
+            ids,
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def reset_pending_notifications() -> int:
@@ -273,14 +272,12 @@ def reset_pending_notifications() -> int:
 
     Returns the number of rows reset.
     """
-    conn = _connect()
-    cur = conn.execute(
-        "UPDATE seen_jobs SET notified_at = NULL WHERE notified_at = 'pending'",
-    )
-    conn.commit()
-    updated = cur.rowcount
-    conn.close()
-    return updated
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE seen_jobs SET notified_at = NULL WHERE notified_at = 'pending'",
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def mark_jobs_notified(job_ids: Iterable[str]) -> int:
@@ -288,17 +285,14 @@ def mark_jobs_notified(job_ids: Iterable[str]) -> int:
     if not ids:
         return 0
 
-    conn = _connect()
-    now = datetime.now(timezone.utc).isoformat()
-    placeholders = ",".join("?" for _ in ids)
-    cur = conn.execute(
-        f"UPDATE seen_jobs SET notified_at = ? WHERE job_id IN ({placeholders})",
-        [now, *ids],
-    )
-    conn.commit()
-    updated = cur.rowcount
-    conn.close()
-    return updated
+    with _connect() as conn:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            f"UPDATE seen_jobs SET notified_at = ? WHERE job_id IN ({_in_clause(ids)})",
+            [now, *ids],
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def _latest_successful_source_run(conn: sqlite3.Connection, company: str, ats: str) -> sqlite3.Row | None:
@@ -317,195 +311,186 @@ def _latest_successful_source_run(conn: sqlite3.Connection, company: str, ats: s
 
 
 def detect_source_anomalies(results: list[dict]) -> list[dict]:
-    conn = _connect()
-    anomalies = []
+    with _connect() as conn:
+        anomalies = []
 
-    for result in results:
-        company = result.get("company", "Unknown")
-        ats = result.get("ats", "")
-        status = result.get("status", "")
-        raw_count = int(result.get("raw_count") or 0)
-        previous = _latest_successful_source_run(conn, company, ats)
+        for result in results:
+            company = result.get("company", "Unknown")
+            ats = result.get("ats", "")
+            status = result.get("status", "")
+            raw_count = int(result.get("raw_count") or 0)
+            previous = _latest_successful_source_run(conn, company, ats)
 
-        if status in {"error", "timeout"}:
-            anomalies.append({
-                **result,
-                "anomaly": "source_failed",
-                "detail": result.get("error") or status,
-            })
-            continue
+            if status in {"error", "timeout"}:
+                anomalies.append({
+                    **result,
+                    "anomaly": "source_failed",
+                    "detail": result.get("error") or status,
+                })
+                continue
 
-        if status != "ok" or previous is None:
-            continue
+            if status != "ok" or previous is None:
+                continue
 
-        previous_raw = int(previous["raw_count"] or 0)
-        if previous_raw >= 20 and raw_count == 0:
-            anomalies.append({
-                **result,
-                "anomaly": "zero_results",
-                "detail": f"returned 0 jobs after previously returning {previous_raw}",
-            })
-        elif previous_raw >= 50 and raw_count < previous_raw * 0.2:
-            anomalies.append({
-                **result,
-                "anomaly": "count_drop",
-                "detail": f"raw job count dropped from {previous_raw} to {raw_count}",
-            })
+            previous_raw = int(previous["raw_count"] or 0)
+            if previous_raw >= 20 and raw_count == 0:
+                anomalies.append({
+                    **result,
+                    "anomaly": "zero_results",
+                    "detail": f"returned 0 jobs after previously returning {previous_raw}",
+                })
+            elif previous_raw >= 50 and raw_count < previous_raw * 0.2:
+                anomalies.append({
+                    **result,
+                    "anomaly": "count_drop",
+                    "detail": f"raw job count dropped from {previous_raw} to {raw_count}",
+                })
 
-    conn.close()
-    return anomalies
+        return anomalies
 
 
 def record_source_results(results: list[dict], selected_lane: str) -> int:
     if not results:
         return 0
 
-    conn = _connect()
-    now = datetime.now(timezone.utc).isoformat()
-    rows = [
-        (
-            now,
-            selected_lane,
-            result.get("company", "Unknown"),
-            result.get("ats", ""),
-            result.get("lane", ""),
-            result.get("status", "unknown"),
-            int(result.get("raw_count") or 0),
-            int(result.get("matched_count") or 0),
-            float(result.get("duration") or 0.0),
-            result.get("error"),
+    with _connect() as conn:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [
+            (
+                now,
+                selected_lane,
+                result.get("company", "Unknown"),
+                result.get("ats", ""),
+                result.get("lane", ""),
+                result.get("status", "unknown"),
+                int(result.get("raw_count") or 0),
+                int(result.get("matched_count") or 0),
+                float(result.get("duration") or 0.0),
+                result.get("error"),
+            )
+            for result in results
+        ]
+        conn.executemany(
+            """
+            INSERT INTO source_runs (
+                run_at,
+                selected_lane,
+                company,
+                ats,
+                source_lane,
+                status,
+                raw_count,
+                matched_count,
+                duration_seconds,
+                error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
         )
-        for result in results
-    ]
-    conn.executemany(
-        """
-        INSERT INTO source_runs (
-            run_at,
-            selected_lane,
-            company,
-            ats,
-            source_lane,
-            status,
-            raw_count,
-            matched_count,
-            duration_seconds,
-            error
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
-    conn.close()
-    return len(rows)
+        conn.commit()
+        return len(rows)
 
 
 def mark_status(job_id: str, status: str) -> bool:
     if status not in VALID_STATUSES:
         return False
-    conn = _connect()
-    now = datetime.now(timezone.utc).isoformat()
-    cur = conn.execute(
-        "UPDATE seen_jobs SET status = ?, status_updated = ? WHERE job_id = ?",
-        (status, now, job_id),
-    )
-    conn.commit()
-    updated = cur.rowcount > 0
-    conn.close()
-    return updated
+    with _connect() as conn:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "UPDATE seen_jobs SET status = ?, status_updated = ? WHERE job_id = ?",
+            (status, now, job_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def search_jobs(query: str, limit: int = 20) -> list[dict]:
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    cur = conn.execute(
-        """
-        SELECT
-            job_id,
-            company,
-            title,
-            location,
-            url,
-            status,
-            first_seen,
-            last_seen,
-            posted_at,
-            source,
-            salary,
-            notified_at
-        FROM seen_jobs
-        WHERE title LIKE ? OR company LIKE ?
-        ORDER BY first_seen DESC
-        LIMIT ?
-        """,
-        (f"%{query}%", f"%{query}%", limit),
-    )
-    results = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return results
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(
+            """
+            SELECT
+                job_id,
+                company,
+                title,
+                location,
+                url,
+                status,
+                first_seen,
+                last_seen,
+                posted_at,
+                source,
+                salary,
+                notified_at
+            FROM seen_jobs
+            WHERE title LIKE ? OR company LIKE ?
+            ORDER BY first_seen DESC
+            LIMIT ?
+            """,
+            (f"%{query}%", f"%{query}%", limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_status_summary() -> dict:
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute("SELECT status, COUNT(*) FROM seen_jobs GROUP BY status ORDER BY COUNT(*) DESC")
-    by_status = cur.fetchall()
-    cur.execute(
-        """
-        SELECT company, title, url, status, first_seen, posted_at, source
-        FROM seen_jobs
-        WHERE status IN ('applied', 'phone_screen', 'interview', 'offer')
-        ORDER BY status_updated DESC
-        """
-    )
-    active = [
-        {
-            "company": r[0],
-            "title": r[1],
-            "url": r[2],
-            "status": r[3],
-            "first_seen": r[4],
-            "posted_at": r[5],
-            "source": r[6],
-        }
-        for r in cur.fetchall()
-    ]
-    conn.close()
-    return {"by_status": by_status, "active_applications": active}
+    with _connect() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT status, COUNT(*) FROM seen_jobs GROUP BY status ORDER BY COUNT(*) DESC")
+        by_status = cur.fetchall()
+        cur.execute(
+            """
+            SELECT company, title, url, status, first_seen, posted_at, source
+            FROM seen_jobs
+            WHERE status IN ('applied', 'phone_screen', 'interview', 'offer')
+            ORDER BY status_updated DESC
+            """
+        )
+        active = [
+            {
+                "company": r[0],
+                "title": r[1],
+                "url": r[2],
+                "status": r[3],
+                "first_seen": r[4],
+                "posted_at": r[5],
+                "source": r[6],
+            }
+            for r in cur.fetchall()
+        ]
+        return {"by_status": by_status, "active_applications": active}
 
 
 def get_recent_source_health(limit: int = 50) -> list[dict]:
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """
-        SELECT
-            run_at,
-            selected_lane,
-            company,
-            ats,
-            source_lane,
-            status,
-            raw_count,
-            matched_count,
-            duration_seconds,
-            error
-        FROM source_runs
-        ORDER BY run_at DESC, duration_seconds DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT
+                run_at,
+                selected_lane,
+                company,
+                ats,
+                source_lane,
+                status,
+                raw_count,
+                matched_count,
+                duration_seconds,
+                error
+            FROM source_runs
+            ORDER BY run_at DESC, duration_seconds DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def get_stats() -> dict:
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM seen_jobs")
-    total = cur.fetchone()[0]
-    cur.execute("SELECT company, COUNT(*) FROM seen_jobs GROUP BY company ORDER BY COUNT(*) DESC")
-    by_company = cur.fetchall()
-    conn.close()
-    return {"total": total, "by_company": by_company}
+    with _connect() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM seen_jobs")
+        total = cur.fetchone()[0]
+        cur.execute("SELECT company, COUNT(*) FROM seen_jobs GROUP BY company ORDER BY COUNT(*) DESC")
+        by_company = cur.fetchall()
+        return {"total": total, "by_company": by_company}

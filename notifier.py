@@ -329,6 +329,9 @@ def send_email(new_jobs: list[dict], config: dict) -> tuple[bool, str]:
     smtp_host = notif.get("smtp_host", "smtp.gmail.com")
     smtp_port = notif.get("smtp_port", 587)
 
+    if not notif.get("email") and to_email:
+        print(f"  Notification recipient defaulting to {to_email}")
+
     if not to_email or not from_user or not from_pass:
         return False, "Email not configured — set JOBWATCH_EMAIL_USER and JOBWATCH_EMAIL_PASSWORD env vars."
 

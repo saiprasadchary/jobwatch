@@ -410,9 +410,12 @@ def cmd_run(args):
     inbox_path = render_inbox(config=config)
     print(f"\nWorkflow inbox updated: {inbox_path}")
 
-    cleaned = cleanup_old_jobs()
-    if cleaned:
-        print(f"Cleaned up {cleaned} job(s) older than 30 days.")
+    # Run retention cleanup only on the browser lane (every 4h) to avoid
+    # unnecessary DELETE queries on every 30-minute fast-lane run.
+    if lane in ("browser", "all"):
+        cleaned = cleanup_old_jobs()
+        if cleaned:
+            print(f"Cleaned up {cleaned} job(s) older than 30 days.")
 
     _print_health_summary(results)
     _print_health_anomalies(health_anomalies)
