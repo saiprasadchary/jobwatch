@@ -61,14 +61,28 @@ jobs:
       - name: Compute H-1B fiscal quarter
         id: h1b-key
         run: |
+          # DOL publishes LCA data quarterly but with a lag.
+          # Try the current quarter first; fall back to the previous one if 404.
           month=$(date +%m)
           year=$(date +%Y)
           if [ "$month" -ge 10 ]; then fy=$((year + 1)); else fy=$year; fi
           case $month in
-            10|11|12) q=1 ;; 01|02|03) q=2 ;; 04|05|06) q=3 ;; 07|08|09) q=4 ;;
+            10|11|12) q=1; pq=4; pfy=$((fy - 1)) ;;
+            01|02|03) q=2; pq=1; pfy=$fy ;;
+            04|05|06) q=3; pq=2; pfy=$fy ;;
+            07|08|09) q=4; pq=3; pfy=$fy ;;
           esac
-          echo "key=h1b-sponsors-fy${fy}-q${q}" >> "$GITHUB_OUTPUT"
-          echo "url=https://www.dol.gov/media/LCA_Dislclosure_Data_FY${fy}_Q${q}.xlsx" >> "$GITHUB_OUTPUT"
+          url="https://www.dol.gov/media/LCA_Dislclosure_Data_FY${fy}_Q${q}.xlsx"
+          if curl -sI "$url" | head -1 | grep -q "200"; then
+            echo "key=h1b-sponsors-fy${fy}-q${q}" >> "$GITHUB_OUTPUT"
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+            echo "Using H-1B data: FY${fy} Q${q}"
+          else
+            fallback="https://www.dol.gov/media/LCA_Dislclosure_Data_FY${pfy}_Q${pq}.xlsx"
+            echo "key=h1b-sponsors-fy${pfy}-q${pq}" >> "$GITHUB_OUTPUT"
+            echo "url=$fallback" >> "$GITHUB_OUTPUT"
+            echo "FY${fy} Q${q} not published yet; falling back to FY${pfy} Q${pq}"
+          fi
 
       - name: Download H-1B sponsor data (cached)
         uses: actions/cache@v4
