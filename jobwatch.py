@@ -207,14 +207,22 @@ def _run_source_pool(
 
             if not process.is_alive():
                 process.join(timeout=1)
+                # The child can put its result and exit between get_nowait()
+                # and is_alive() above — drain once more before declaring it
+                # dead, or a finished worker's jobs get silently dropped.
+                try:
+                    result = outbox.get(timeout=1)
+                except queue.Empty:
+                    result = None
                 outbox.close()
                 active.remove(item)
-                result = {
-                    **_timeout_result(item["index"], item["company"], timeout_seconds),
-                    "duration": elapsed,
-                    "status": "error",
-                    "error": "worker exited without returning a result",
-                }
+                if result is None:
+                    result = {
+                        **_timeout_result(item["index"], item["company"], timeout_seconds),
+                        "duration": elapsed,
+                        "status": "error",
+                        "error": "worker exited without returning a result",
+                    }
                 _print_source_result(result)
                 results.append(result)
                 start_next()
@@ -346,6 +354,19 @@ def cmd_run(args):
     successful_sources = [result for result in results if result["status"] == "ok"]
     health_anomalies = [] if dry_run else detect_source_anomalies(results)
 
+    if not dry_run:
+        # Recover rows stranded at notified_at='pending' by a previous run
+        # that died between marking and sending (Ctrl+C, SIGKILL, runner
+        # cancellation).  Without this they would never be alerted and would
+        # eventually be deleted by retention. A rare duplicate alert beats a
+        # silently lost one.
+        stale_pending = reset_pending_notifications()
+        if stale_pending:
+            print(
+                f"Recovered {stale_pending} job(s) stuck in pending-notification "
+                "state from a previous interrupted run."
+            )
+
     jobs_to_report = all_matched if dry_run else sync_jobs(all_matched)
     pending_jobs = rank_jobs(jobs_to_report, config=config)
     print_report(pending_jobs, config)
@@ -368,43 +389,48 @@ def cmd_run(args):
 
         email_jobs = _select_email_jobs(pending_jobs, config)
         subject = build_subject(email_jobs or pending_jobs, config)
+
+        # The try block wraps ONLY the send. Once send_email reports success
+        # the delivery is irrevocable — bookkeeping failures after that must
+        # never reset pending state or fail the run, or the same batch gets
+        # re-sent on the next run.
+        failure_status = "pending_delivery"
         try:
             if email_jobs:
                 sent, delivery_message = send_email(email_jobs, config)
             else:
                 sent = True
                 delivery_message = "No instant-alert tier roles this run; pending roles were archived in the workflow inbox."
+        except Exception as e:
+            sent = False
+            delivery_message = f"Email failed: {e}"
+            failure_status = "delivery_failed"
 
-            if sent:
-                mark_jobs_notified(pending_ids)
+        if sent:
+            mark_jobs_notified(pending_ids)
+            try:
                 record_batch(
                     status="sent" if email_jobs else "inbox_only",
                     jobs=pending_jobs,
                     recipient=recipient,
                     subject=subject,
                 )
-                print(f"\n{delivery_message}")
-            else:
-                delivery_error = delivery_message
-                reset_pending_notifications()
+            except Exception as e:
+                print(f"\nWARNING: workflow inbox bookkeeping failed (alerts were already delivered): {e}")
+            print(f"\n{delivery_message}")
+        else:
+            delivery_error = delivery_message
+            reset_pending_notifications(pending_ids)
+            try:
                 record_batch(
-                    status="pending_delivery",
+                    status=failure_status,
                     jobs=pending_jobs,
                     recipient=recipient,
                     subject=subject,
                     error=delivery_error,
                 )
-                print(f"\n{delivery_error}")
-        except Exception as e:
-            delivery_error = f"Email failed: {e}"
-            reset_pending_notifications()
-            record_batch(
-                status="delivery_failed",
-                jobs=pending_jobs,
-                recipient=recipient,
-                subject=subject,
-                error=delivery_error,
-            )
+            except Exception as e:
+                print(f"\nWARNING: failed to record delivery-failure batch: {e}")
             print(f"\n{delivery_error}")
 
         if email_jobs:

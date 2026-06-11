@@ -3,6 +3,10 @@ import requests
 
 SEARCH_URL = "https://{domain}/search-jobs/results"
 
+# Safety cap: 20 pages x 100 records. TalentBrew scrapes HTML out of a JSON
+# envelope, so a markup change could otherwise loop forever.
+MAX_PAGES = 20
+
 
 def fetch_talentbrew(company: dict) -> list[dict]:
     domain = company["domain"]
@@ -12,7 +16,7 @@ def fetch_talentbrew(company: dict) -> list[dict]:
     jobs = []
     page = 1
 
-    while True:
+    while page <= MAX_PAGES:
         params = {
             "ActiveFacetID": 0,
             "CurrentPage": page,

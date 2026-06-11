@@ -4,6 +4,26 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source .venv/bin/activate
 
+# Prevent overlapping runs against the same jobwatch.db (a slow browser-lane
+# run can exceed the cron interval; an overlapping run's delivery failure
+# could reset this run's in-flight notification markers).
+LOCK_DIR="/tmp/jobwatch.lock"
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo $$ > "$LOCK_DIR/pid"
+    trap 'rm -rf "$LOCK_DIR"' EXIT
+else
+    LOCK_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+        echo "Another JobWatch run (PID $LOCK_PID) is in progress; skipping."
+        exit 0
+    fi
+    # Stale lock from a hard-killed run — reclaim it.
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR"
+    echo $$ > "$LOCK_DIR/pid"
+    trap 'rm -rf "$LOCK_DIR"' EXIT
+fi
+
 # Load email credentials from .env if it exists
 if [ -f .env ]; then
     set -a

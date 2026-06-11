@@ -118,15 +118,45 @@ _US_CITIES = (
     "Fort Collins", "Arvada", "Westminster",
 )
 
-# Non-US qualifiers that disqualify "Remote" / "Hybrid" / "Anywhere".
-_NON_US_QUALIFIERS = (
-    "india", "uk", "europe", "canada", "apac", "emea", "latam",
+# Unambiguous non-US markers (countries, regions, Canadian provinces, and a
+# few foreign cities that co-occur with allowlisted US names).  Used as a
+# veto BEFORE the US-positive check: "Richmond, British Columbia" and
+# "Birmingham, UK" must not be kept just because "Richmond"/"Birmingham"
+# are on the US city list.  An explicit US country token ("US", "USA",
+# "United States") overrides the veto so "Remote - US & Canada" stays.
+# Deliberately excludes names that are also notable US places
+# ("New Brunswick" NJ, "Vancouver" WA, "Manchester" NH, "Paris" TX).
+_NON_US_MARKERS = (
+    # Countries / regions
+    "india", "uk", "united kingdom", "england", "scotland", "wales",
+    "ireland", "canada", "mexico", "brazil", "argentina", "colombia",
+    "germany", "france", "spain", "italy", "netherlands", "belgium",
+    "poland", "romania", "portugal", "switzerland", "austria", "sweden",
+    "norway", "denmark", "finland", "israel", "turkey", "egypt",
+    "nigeria", "south africa", "japan", "china", "taiwan", "korea",
+    "singapore", "malaysia", "indonesia", "philippines", "vietnam",
+    "thailand", "australia", "new zealand", "europe", "apac", "emea",
+    "latam",
+    # Canadian provinces
     "british columbia", "ontario", "quebec", "alberta", "manitoba",
-    "saskatchewan", "nova scotia", "new brunswick",
-    "global", "worldwide", "international",
+    "saskatchewan", "nova scotia",
+    # Foreign cities that defeat US-name collisions
+    "toronto", "mississauga", "bengaluru", "bangalore", "hyderabad",
+    "mumbai", "delhi", "pune", "chennai", "gurgaon", "noida",
+    "tel aviv", "tbilisi", "berlin", "bogota", "tokyo", "sydney",
 )
-_NON_US_QUAL_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(q) for q in _NON_US_QUALIFIERS) + r")\b",
+_NON_US_MARKER_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(q) for q in _NON_US_MARKERS) + r")\b",
+    re.IGNORECASE,
+)
+
+# Explicit US country tokens (subset of _us_re) — used to override the
+# non-US marker veto for multi-country listings like "Remote - US & Canada".
+_US_COUNTRY_RE = re.compile(
+    r"\b(?:usa|united\s+states)\b"
+    r"|\bu\.s\.a\.(?:\b|$|(?=[\s,;)/-]))"
+    r"|\bu\.s\.(?:\b|$|(?=[\s,;)/-]))"
+    r"|(?:^|(?<=[\s,(]))US(?=$|[\s,)/-])",
     re.IGNORECASE,
 )
 
@@ -193,8 +223,10 @@ def is_non_us(location: str) -> bool:
 
     Returns True (= drop the job) unless there is a clear US signal.
     - Empty/missing location → KEEP (benefit of the doubt).
+    - Explicit non-US marker (country/province/foreign city) without an
+      explicit US country token → DROP, even if a US city name collides.
     - Explicit US signal (state, city, country name) → KEEP.
-    - "Remote"/"Hybrid"/"Anywhere" without non-US qualifier → KEEP.
+    - Standalone "Remote"/"Hybrid" → KEEP.
     - Everything else → DROP.
     """
     if not location or not location.strip():
@@ -205,16 +237,32 @@ def is_non_us(location: str) -> bool:
     # 0. Country-code prefix (e.g. "CA-Remote", "IN-Bangalore", "DE-Berlin").
     #    If the location starts with a 2-letter non-US code + dash, it is
     #    non-US even if the code happens to match a US state abbreviation
-    #    (e.g. "CA" = Canada here, not California).
-    has_country_prefix = bool(_COUNTRY_CODE_PREFIX_RE.search(loc))
-    if has_country_prefix:
+    #    (e.g. "CA" = Canada here, not California) — UNLESS the prefix is a
+    #    US state abbreviation AND the remainder carries its own US signal
+    #    ("TX-Dallas", "CA-Sunnyvale" are state-first US formats).
+    if _COUNTRY_CODE_PREFIX_RE.search(loc):
+        prefix = loc[:2].upper()
+        rest = loc[3:]
+        if (
+            prefix in _US_STATES
+            and _us_re.search(rest)
+            and not _NON_US_MARKER_RE.search(rest)
+        ):
+            return False
         return True
 
-    # 1. Check for explicit US signals (cities, states, country synonyms).
+    # 1. Non-US marker veto: a foreign country/province/city in the string
+    #    overrides US city-name collisions ("Richmond, British Columbia",
+    #    "Tbilisi, Georgia", "Tel Aviv, IL"), unless an explicit US country
+    #    token is also present ("Remote - US & Canada").
+    if _NON_US_MARKER_RE.search(loc) and not _US_COUNTRY_RE.search(loc):
+        return True
+
+    # 2. Check for explicit US signals (cities, states, country synonyms).
     if _us_re.search(loc):
         return False
 
-    # 2. Check for "Remote" / "Hybrid".
+    # 3. Check for "Remote" / "Hybrid".
     #    US-positive ONLY if:
     #    a) standalone ("Remote", "Hybrid") — no other meaningful content, OR
     #    b) paired with US signal that step 1 already found (which returned False).
@@ -227,7 +275,7 @@ def is_non_us(location: str) -> bool:
         if not stripped:
             return False
 
-    # 3. No US signal found → treat as non-US.
+    # 4. No US signal found → treat as non-US.
     return True
 
 
@@ -258,7 +306,14 @@ def _parse_timestamp(raw) -> datetime | None:
     if s.lower() in ("posted today", "today"):
         return datetime.now(timezone.utc)
     if s.lower() in ("posted yesterday", "yesterday"):
-        return datetime.now(timezone.utc) - timedelta(days=1)
+        # Use the latest possible moment of "yesterday" (end of the previous
+        # UTC day).  Parsing it as exactly now-24h made every such job fail
+        # the 24h staleness cutoff by microseconds, silently dropping jobs
+        # that could be only hours old (posted 11pm, scraped 1am).
+        start_of_today = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return start_of_today - timedelta(seconds=1)
     m = _RELATIVE_RE.match(s)
     if m:
         n, unit = int(m.group(1)), m.group(2).lower()
@@ -267,7 +322,15 @@ def _parse_timestamp(raw) -> datetime | None:
 
     try:
         from datetime import datetime as dt_cls
-        return dt_cls.fromisoformat(s.replace("Z", "+00:00"))
+        parsed = dt_cls.fromisoformat(s.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        # Date-only strings ("2026-06-09") parse to midnight UTC; treat them
+        # as end-of-day so a date-resolution posting isn't declared stale up
+        # to 24h early.
+        if len(s) == 10:
+            parsed += timedelta(hours=23, minutes=59, seconds=59)
+        return parsed
     except (ValueError, TypeError):
         pass
 
@@ -279,7 +342,10 @@ def _parse_timestamp(raw) -> datetime | None:
         "%m/%d/%Y",
     ):
         try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            # Date-only formats: anchor to end-of-day (see ISO branch above).
+            return datetime.strptime(s, fmt).replace(
+                tzinfo=timezone.utc, hour=23, minute=59, second=59
+            )
         except ValueError:
             continue
     return None

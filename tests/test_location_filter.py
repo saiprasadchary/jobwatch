@@ -46,7 +46,7 @@ US_LOCATIONS = [
     "Tysons, VA",
     "Plano, TX",
     "Durham, NC",
-    "Germantown, MD",
+    "Rockville, MD",
     "Bellevue, WA",
     "Cupertino, CA",
     "Redmond, WA",
@@ -200,15 +200,66 @@ class TestEdgeCases:
         # "Anywhere" has no US signal — should drop under strict allowlist
         assert is_non_us("Anywhere") is True
 
-    def test_multiple_locations_ambiguous(self) -> None:
-        # "Multiple Locations" is ambiguous — no US signal, behavior may vary.
-        # Under strict allowlist it should drop; under current 3-tier it keeps.
-        # Mark as expected to fail if implementation keeps benefit-of-doubt.
-        result = is_non_us("Multiple Locations")
-        # Document actual behavior rather than assert either way:
-        # If strict allowlist: assert result is True
-        # If benefit-of-doubt: assert result is False
-        assert result in (True, False)  # always passes; documents the edge case
+    def test_multiple_locations_is_dropped(self) -> None:
+        # "Multiple Locations" carries no US signal — strict allowlist drops it.
+        # (Workday adapters resolve it to the real location list before
+        # filtering, so this only hits sources that leave it unresolved.)
+        assert is_non_us("Multiple Locations") is True
+
+    # ── Non-US marker veto: foreign provinces/countries override US
+    # city-name collisions ─────────────────────────────────────────────
+
+    def test_richmond_british_columbia_is_dropped(self) -> None:
+        assert is_non_us("Richmond, British Columbia") is True
+        assert is_non_us("Richmond, British Columbia, Canada") is True
+
+    def test_burlington_ontario_is_dropped(self) -> None:
+        assert is_non_us("Burlington, Ontario, Canada") is True
+
+    def test_birmingham_uk_is_dropped(self) -> None:
+        assert is_non_us("Birmingham, UK") is True
+        assert is_non_us("Birmingham, United Kingdom") is True
+
+    def test_worcester_uk_is_dropped(self) -> None:
+        assert is_non_us("Worcester, United Kingdom") is True
+
+    def test_tbilisi_georgia_is_dropped(self) -> None:
+        assert is_non_us("Tbilisi, Georgia") is True
+
+    def test_tel_aviv_il_is_dropped(self) -> None:
+        assert is_non_us("Tel Aviv, IL") is True
+
+    def test_berlin_de_is_dropped(self) -> None:
+        assert is_non_us("Berlin, DE") is True
+
+    def test_bogota_co_is_dropped(self) -> None:
+        assert is_non_us("Bogota, CO") is True
+
+    def test_explicit_us_token_overrides_marker_veto(self) -> None:
+        assert is_non_us("Remote - US & Canada") is False
+        assert is_non_us("United States or Canada") is False
+
+    def test_us_cities_named_like_foreign_places_are_kept(self) -> None:
+        # These collide with excluded foreign names but are real US places.
+        assert is_non_us("Richmond, VA") is False
+        assert is_non_us("Burlington, MA") is False
+        assert is_non_us("Birmingham, AL") is False
+        assert is_non_us("New Brunswick, NJ") is False
+        assert is_non_us("Vancouver, WA") is False
+
+    # ── State-first prefix format ("TX-Dallas") ────────────────────────
+
+    def test_state_prefix_with_us_city_is_kept(self) -> None:
+        assert is_non_us("TX-Dallas") is False
+        assert is_non_us("CA-Sunnyvale") is False
+        assert is_non_us("NY-New York") is False
+        assert is_non_us("VA-Reston") is False
+
+    def test_state_prefix_with_foreign_city_is_dropped(self) -> None:
+        assert is_non_us("CA-Toronto") is True
+        assert is_non_us("CA-Remote-British Columbia") is True
+        assert is_non_us("IN-Bangalore") is True
+        assert is_non_us("DE-Berlin") is True
 
 
 # ── 4. Full filter_jobs pipeline test ──────────────────────────────────

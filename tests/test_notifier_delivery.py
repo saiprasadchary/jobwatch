@@ -13,9 +13,10 @@ import notifier
 
 
 class FakeSMTP:
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
         self.host = host
         self.port = port
+        self.timeout = timeout
         self.logged_in_as: tuple[str, str] | None = None
         self.sent_messages = []
 
@@ -36,7 +37,8 @@ class FakeSMTP:
 
 
 class FakeIMAP:
-    def __init__(self, _host: str) -> None:
+    def __init__(self, _host: str, timeout: float | None = None) -> None:
+        self.timeout = timeout
         self.selected_folder = ""
         self.inbox_has_message = False
         self.search_history: list[tuple[str, tuple[str, ...]]] = []
@@ -107,13 +109,13 @@ class NotifierDeliveryTests(unittest.TestCase):
         smtp_instances: list[FakeSMTP] = []
         imap_instances: list[FakeIMAP] = []
 
-        def fake_smtp(host: str, port: int) -> FakeSMTP:
-            instance = FakeSMTP(host, port)
+        def fake_smtp(host: str, port: int, timeout: float | None = None) -> FakeSMTP:
+            instance = FakeSMTP(host, port, timeout=timeout)
             smtp_instances.append(instance)
             return instance
 
-        def fake_imap(host: str) -> FakeIMAP:
-            instance = FakeIMAP(host)
+        def fake_imap(host: str, timeout: float | None = None) -> FakeIMAP:
+            instance = FakeIMAP(host, timeout=timeout)
             imap_instances.append(instance)
             return instance
 
@@ -164,8 +166,8 @@ class NotifierDeliveryTests(unittest.TestCase):
 
         smtp_instances: list[FakeSMTP] = []
 
-        def fake_smtp(host: str, port: int) -> FakeSMTP:
-            instance = FakeSMTP(host, port)
+        def fake_smtp(host: str, port: int, timeout: float | None = None) -> FakeSMTP:
+            instance = FakeSMTP(host, port, timeout=timeout)
             smtp_instances.append(instance)
             return instance
 
@@ -182,6 +184,136 @@ class NotifierDeliveryTests(unittest.TestCase):
         self.assertEqual(detail, "Email sent to alerts@example.com")
         self.assertEqual(len(smtp_instances), 1)
         self.assertEqual(len(smtp_instances[0].sent_messages), 1)
+
+    def _same_account_config(self) -> dict:
+        return {
+            "notification": {
+                "email": "me@gmail.com",
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+            },
+            "ranking": {"top_picks": 3, "preferred_companies": []},
+        }
+
+    def _job(self) -> dict:
+        return {
+            "job_id": "job-1",
+            "company": "Example",
+            "title": "Software Development Engineer",
+            "location": "Austin, TX",
+            "url": "https://example.com/jobs/1",
+            "posted_at": "2026-05-19T12:00:00Z",
+            "source": "greenhouse",
+            "rank_band": "Top",
+            "rank_score": 140,
+            "rank_reasons": ["posted in the last hour"],
+            "rank_reason_text": "posted in the last hour",
+        }
+
+    def test_gmail_promotion_falls_back_to_append_when_message_not_found(self) -> None:
+        class EmptySearchIMAP(FakeIMAP):
+            def search(self, _charset, *criteria):
+                self.search_history.append((self.selected_folder, criteria))
+                if self.selected_folder == "INBOX" and self.inbox_has_message:
+                    return "OK", [b"42"]
+                return "OK", [b""]
+
+        imap_instances: list[EmptySearchIMAP] = []
+
+        def fake_imap(host: str, timeout: float | None = None) -> EmptySearchIMAP:
+            instance = EmptySearchIMAP(host, timeout=timeout)
+            imap_instances.append(instance)
+            return instance
+
+        with patch.dict(
+            os.environ,
+            {"JOBWATCH_EMAIL_USER": "me@gmail.com", "JOBWATCH_EMAIL_PASSWORD": "app-password"},
+            clear=False,
+        ), patch.object(notifier.smtplib, "SMTP", side_effect=FakeSMTP), patch.object(
+            notifier.imaplib, "IMAP4_SSL", side_effect=fake_imap
+        ), patch.object(
+            notifier.time, "sleep", return_value=None
+        ), patch.object(
+            notifier, "is_h1b_sponsor", return_value=False
+        ):
+            sent, detail = notifier.send_email([self._job()], self._same_account_config())
+
+        self.assertTrue(sent)
+        self.assertTrue(imap_instances[0].append_history)
+        self.assertIn("inbox copy", detail)
+
+    def test_send_email_succeeds_even_when_gmail_promotion_raises(self) -> None:
+        # This invariant is load-bearing for the duplicate-alert fix: a flaky
+        # IMAP must not report sent=False after SMTP accepted the message, or
+        # already-delivered jobs get re-queued and re-sent.
+        with patch.dict(
+            os.environ,
+            {"JOBWATCH_EMAIL_USER": "me@gmail.com", "JOBWATCH_EMAIL_PASSWORD": "app-password"},
+            clear=False,
+        ), patch.object(notifier.smtplib, "SMTP", side_effect=FakeSMTP), patch.object(
+            notifier.imaplib, "IMAP4_SSL", side_effect=RuntimeError("imap down")
+        ), patch.object(
+            notifier, "is_h1b_sponsor", return_value=False
+        ):
+            sent, detail = notifier.send_email([self._job()], self._same_account_config())
+
+        self.assertTrue(sent)
+        self.assertIn("promotion failed", detail)
+
+
+class NtfyTests(unittest.TestCase):
+    def _job(self, band: str = "Strong", title: str = "Backend Engineer") -> dict:
+        return {
+            "job_id": f"job-{title}",
+            "company": "Example",
+            "title": title,
+            "location": "Austin, TX",
+            "url": "https://example.com/jobs/1",
+            "rank_band": band,
+        }
+
+    def _config(self, topic: str = "test-topic") -> dict:
+        return {"notification": {"ntfy_topic": topic, "ntfy_server": "https://ntfy.sh"}}
+
+    def test_no_request_when_topic_missing(self) -> None:
+        with patch.dict(os.environ, {}, clear=False), patch(
+            "urllib.request.urlopen"
+        ) as urlopen:
+            os.environ.pop("JOBWATCH_NTFY_TOPIC", None)
+            notifier.send_ntfy([self._job()], {"notification": {}})
+        urlopen.assert_not_called()
+
+    def test_push_sent_with_truncation_and_priority(self) -> None:
+        jobs = [self._job(title=f"Engineer {i}") for i in range(7)]
+        jobs[0]["rank_band"] = "Top"
+
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["request"] = request
+            captured["timeout"] = timeout
+
+            class _Resp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return None
+
+            return _Resp()
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            notifier.send_ntfy(jobs, self._config())
+
+        request = captured["request"]
+        self.assertIn("test-topic", request.full_url)
+        body = request.data.decode("utf-8")
+        self.assertIn("and 2 more", body)
+        self.assertEqual(request.get_header("Priority"), "4")
+
+    def test_push_failure_is_swallowed(self) -> None:
+        with patch("urllib.request.urlopen", side_effect=OSError("network down")):
+            notifier.send_ntfy([self._job()], self._config())  # must not raise
 
 
 if __name__ == "__main__":

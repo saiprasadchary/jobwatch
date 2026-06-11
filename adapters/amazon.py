@@ -47,8 +47,14 @@ def fetch_amazon(company: dict = None) -> list[dict]:
         for j in data.get("jobs", []):
             if not _is_us_job(j):
                 continue
+            # .get with a default doesn't cover explicit nulls — a posting
+            # with "id_icims": null would produce the colliding id "amz-None"
+            # and break dedup. Skip postings with no usable id instead.
+            job_id = j.get("id_icims") or j.get("id")
+            if not job_id:
+                continue
             jobs.append({
-                "job_id": f"amz-{j.get('id_icims', j.get('id', ''))}",
+                "job_id": f"amz-{job_id}",
                 "company": "Amazon",
                 "title": j.get("title", ""),
                 "location": _job_location(j),

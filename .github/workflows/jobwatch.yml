@@ -27,14 +27,19 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    # Backstop against hung SMTP/IMAP or browser sessions: without this a
+    # stuck run holds the concurrency group for GitHub's 6h default and
+    # queued scheduled runs suspend all alerting. Browser lane normally
+    # takes ~25 min.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: .
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -57,6 +62,9 @@ jobs:
           if [ "${{ steps.lane.outputs.lane }}" != "fast" ]; then
             playwright install --with-deps chromium
           fi
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
 
       - name: Compute H-1B fiscal quarter
         id: h1b-key
@@ -85,7 +93,7 @@ jobs:
           fi
 
       - name: Download H-1B sponsor data (cached)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: h1b-cache
         with:
           path: h1b_sponsors.db
@@ -164,7 +172,7 @@ jobs:
 
       - name: Upload JobWatch state artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jobwatch-state
           path: jobwatch.db

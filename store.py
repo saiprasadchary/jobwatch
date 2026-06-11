@@ -264,18 +264,31 @@ def mark_jobs_pending_notification(job_ids: Iterable[str]) -> int:
         return cur.rowcount
 
 
-def reset_pending_notifications() -> int:
-    """Reset any ``notified_at = 'pending'`` rows back to NULL.
+def reset_pending_notifications(job_ids: Iterable[str] | None = None) -> int:
+    """Reset ``notified_at = 'pending'`` rows back to NULL.
 
     Call this when email delivery fails so the jobs are picked up again on the
-    next pipeline run.
+    next pipeline run.  Pass the job_ids this run marked to scope the reset
+    (so an overlapping run's in-flight pending markers are left alone); call
+    with no arguments at startup to recover rows stranded at 'pending' by a
+    previous hard-killed run.
 
     Returns the number of rows reset.
     """
     with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE seen_jobs SET notified_at = NULL WHERE notified_at = 'pending'",
-        )
+        if job_ids is None:
+            cur = conn.execute(
+                "UPDATE seen_jobs SET notified_at = NULL WHERE notified_at = 'pending'",
+            )
+        else:
+            ids = list(dict.fromkeys(job_ids))
+            if not ids:
+                return 0
+            cur = conn.execute(
+                "UPDATE seen_jobs SET notified_at = NULL "
+                f"WHERE notified_at = 'pending' AND job_id IN ({_in_clause(ids)})",
+                ids,
+            )
         conn.commit()
         return cur.rowcount
 

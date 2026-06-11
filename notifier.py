@@ -287,7 +287,7 @@ def _promote_self_gmail_alert(msg: MIMEMultipart, from_user: str, from_pass: str
     if not message_id:
         raise RuntimeError("JobWatch message is missing a Message-ID header.")
 
-    mailbox = imaplib.IMAP4_SSL(GMAIL_IMAP_HOST)
+    mailbox = imaplib.IMAP4_SSL(GMAIL_IMAP_HOST, timeout=30)
     try:
         mailbox.login(from_user, from_pass)
 
@@ -337,7 +337,7 @@ def send_email(new_jobs: list[dict], config: dict) -> tuple[bool, str]:
 
     msg = _build_message(new_jobs, config, from_user, to_email)
 
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
         server.starttls()
         server.login(from_user, from_pass)
         server.send_message(msg)

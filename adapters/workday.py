@@ -5,7 +5,7 @@ CXS_URL = "https://{tenant}.myworkdayjobs.com/wday/cxs/{company}/{site}/jobs"
 DETAIL_URL = "https://{tenant}.myworkdayjobs.com/wday/cxs/{company}/{site}{path}"
 
 _MULTI_LOC_RE = re.compile(r"^\d+ Locations?$", re.IGNORECASE)
-DEFAULT_MAX_PAGES = 8
+DEFAULT_MAX_PAGES = 25
 
 
 def _resolve_locations(tenant: str, company_slug: str, site: str, external_path: str) -> str:
@@ -104,5 +104,12 @@ def fetch_workday(company: dict) -> list[dict]:
             break
         offset += limit
         pages += 1
+    else:
+        if expected_total and len(seen_job_ids) < expected_total:
+            print(
+                f"  WARNING: {company['name']} workday board truncated at "
+                f"{len(seen_job_ids)}/{expected_total} jobs (max_pages={max_pages}); "
+                "set max_pages in config.yaml to raise the cap."
+            )
 
     return jobs

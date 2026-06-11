@@ -348,15 +348,21 @@ def _try_click_pagination(page, selector: str, job_selector: str) -> bool:
                 page.wait_for_timeout(1200)
 
             after = _job_list_signature(page, job_selector)
-            if after != before:
-                return True
 
-            # Some career sites navigate into a role detail instead of paginating.
+            # Some career sites navigate into a role detail instead of
+            # paginating — the job list vanishes and the URL changes. This
+            # must be checked BEFORE the success check (a URL change alone
+            # makes after != before) or the misclick counts as pagination
+            # and silently truncates the company at page 1.
             if after[1] == 0 and after[0] != before[0]:
                 try:
                     page.go_back(wait_until="networkidle", timeout=8000)
                 except Exception:
                     pass
+                continue
+
+            if after != before:
+                return True
         except Exception:
             continue
     return False
