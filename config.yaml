@@ -81,16 +81,19 @@ companies:
     ats: workday
     tenant: salesforce.wd12
     site: External_Career_Site
+    max_pages: 80
 
   - name: Palo Alto Networks
     ats: workday
     tenant: paloaltonetworks.wd5
     site: panwexternalcareers
+    max_pages: 80
 
   - name: Nordstrom
     ats: workday
     tenant: nordstrom.wd501
     site: nordstrom_careers
+    max_pages: 80
 
   # --- TalentBrew/Radancy (Arm uses this on top of iCIMS) ---
   - name: Arm
@@ -208,26 +211,31 @@ companies:
     ats: workday
     tenant: adobe.wd5
     site: external_experienced
+    max_pages: 80
 
   - name: Capital One
     ats: workday
     tenant: capitalone.wd12
     site: Capital_One
+    max_pages: 80
 
   - name: Comcast
     ats: workday
     tenant: comcast.wd5
     site: Comcast_Careers
+    max_pages: 80
 
   - name: NXP
     ats: workday
     tenant: nxp.wd3
     site: careers
+    max_pages: 80
 
   - name: Fidelity
     ats: workday
     tenant: fmr.wd1
     site: FidelityCareers
+    max_pages: 80
 
   # --- Phenom ---
   - name: AMD

@@ -143,6 +143,7 @@ jobs:
         id: state-artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          STATE_KEY: ${{ secrets.JOBWATCH_STATE_KEY }}
         run: |
           set -euo pipefail
           restored=0
@@ -150,9 +151,17 @@ jobs:
             rm -rf /tmp/jobwatch-state
             mkdir -p /tmp/jobwatch-state
             if gh run download "$run_id" -n jobwatch-state -D /tmp/jobwatch-state >/dev/null 2>&1; then
-              if [ -f /tmp/jobwatch-state/jobwatch.db ]; then
+              if [ -f /tmp/jobwatch-state/jobwatch.db.enc ] && [ -n "$STATE_KEY" ]; then
+                if openssl enc -d -aes-256-cbc -pbkdf2 -in /tmp/jobwatch-state/jobwatch.db.enc -out jobwatch.db -pass env:STATE_KEY; then
+                  echo "Restored encrypted JobWatch DB from workflow run $run_id"
+                  restored=1
+                  break
+                fi
+                echo "Failed to decrypt state from run $run_id; trying older runs."
+              elif [ -f /tmp/jobwatch-state/jobwatch.db ]; then
+                # Legacy plaintext artifact from before encryption was added.
                 cp /tmp/jobwatch-state/jobwatch.db jobwatch.db
-                echo "Restored JobWatch DB from workflow run $run_id"
+                echo "Restored legacy plaintext JobWatch DB from workflow run $run_id"
                 restored=1
                 break
               fi
@@ -170,11 +179,22 @@ jobs:
           JOBWATCH_NTFY_TOPIC: ${{ secrets.JOBWATCH_NTFY_TOPIC }}
         run: python jobwatch.py run --lane "${{ steps.lane.outputs.lane }}"
 
+      - name: Encrypt JobWatch state
+        if: always()
+        env:
+          STATE_KEY: ${{ secrets.JOBWATCH_STATE_KEY }}
+        run: |
+          # Artifacts on a public repo are downloadable by anyone with a
+          # GitHub account — never upload the DB in plaintext.
+          if [ -f jobwatch.db ] && [ -n "$STATE_KEY" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in jobwatch.db -out jobwatch.db.enc -pass env:STATE_KEY
+          fi
+
       - name: Upload JobWatch state artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: jobwatch-state
-          path: jobwatch.db
+          path: jobwatch.db.enc
           if-no-files-found: warn
           retention-days: 90
