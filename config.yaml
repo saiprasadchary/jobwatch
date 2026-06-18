@@ -54,42 +54,50 @@ alerting:
 companies:
   # --- Greenhouse (Phase 1) ---
   - name: Okta
+    tier: other
     ats: greenhouse
     slug: okta
 
   # --- Lever (Phase 1) ---
   - name: Palantir
+    tier: other
     ats: lever
     slug: palantir
 
   # --- Ashby (Phase 1) ---
   - name: Snowflake
+    tier: target
     ats: ashby
     slug: snowflake
 
   # --- SmartRecruiters (Phase 1) ---
   - name: ServiceNow
+    tier: target
     ats: smartrecruiters
     slug: ServiceNow
 
   - name: Complian
+    tier: other
     ats: smartrecruiters
     slug: complian
 
   # --- Workday (Phase 2) ---
   - name: Salesforce
+    tier: target
     ats: workday
     tenant: salesforce.wd12
     site: External_Career_Site
     max_pages: 80
 
   - name: Palo Alto Networks
+    tier: target
     ats: workday
     tenant: paloaltonetworks.wd5
     site: panwexternalcareers
     max_pages: 80
 
   - name: Nordstrom
+    tier: other
     ats: workday
     tenant: nordstrom.wd501
     site: nordstrom_careers
@@ -97,6 +105,7 @@ companies:
 
   # --- TalentBrew/Radancy (Arm uses this on top of iCIMS) ---
   - name: Arm
+    tier: target
     ats: talentbrew
     domain: careers.arm.com
 
@@ -112,11 +121,13 @@ companies:
 
   # --- Oleeo (Phase 3) ---
   - name: Morgan Stanley
+    tier: target
     ats: oleeo
     subdomain: morganstanley
 
   # --- HN Who's Hiring (monthly thread) ---
   - name: HN Who's Hiring
+    tier: other
     ats: hn_hiring
 
   # ══════════════════════════════════════════════
@@ -125,113 +136,138 @@ companies:
 
   # --- Greenhouse ---
   - name: Databricks
+    tier: other
     ats: greenhouse
     slug: databricks
 
   - name: Datadog
+    tier: other
     ats: greenhouse
     slug: datadog
 
   - name: Stripe
+    tier: other
     ats: greenhouse
     slug: stripe
 
   - name: Cloudflare
+    tier: other
     ats: greenhouse
     slug: cloudflare
 
   - name: MongoDB
+    tier: other
     ats: greenhouse
     slug: mongodb
 
   - name: Elastic
+    tier: other
     ats: greenhouse
     slug: elastic
 
   - name: Twilio
+    tier: other
     ats: greenhouse
     slug: twilio
 
   - name: Vercel
+    tier: other
     ats: greenhouse
     slug: vercel
 
   - name: Robinhood
+    tier: other
     ats: greenhouse
     slug: robinhood
 
   - name: Block
+    tier: other
     ats: greenhouse
     slug: block
 
   - name: Lyft
+    tier: other
     ats: greenhouse
     slug: lyft
 
   - name: Airbnb
+    tier: other
     ats: greenhouse
     slug: airbnb
 
   - name: Pinterest
+    tier: other
     ats: greenhouse
     slug: pinterest
 
   - name: Reddit
+    tier: other
     ats: greenhouse
     slug: reddit
 
   - name: Figma
+    tier: other
     ats: greenhouse
     slug: figma
 
   - name: Rubrik
+    tier: other
     ats: greenhouse
     slug: rubrik
 
   # --- Ashby ---
   - name: Confluent
+    tier: other
     ats: ashby
     slug: confluent
 
   - name: Notion
+    tier: other
     ats: ashby
     slug: notion
 
   - name: Linear
+    tier: other
     ats: ashby
     slug: linear
 
   # --- SmartRecruiters ---
   - name: Visa
+    tier: target
     ats: smartrecruiters
     slug: visa
 
   # --- Workday ---
   - name: Adobe
+    tier: target
     ats: workday
     tenant: adobe.wd5
     site: external_experienced
     max_pages: 80
 
   - name: Capital One
+    tier: target
     ats: workday
     tenant: capitalone.wd12
     site: Capital_One
     max_pages: 80
 
   - name: Comcast
+    tier: other
     ats: workday
     tenant: comcast.wd5
     site: Comcast_Careers
     max_pages: 80
 
   - name: NXP
+    tier: other
     ats: workday
     tenant: nxp.wd3
     site: careers
     max_pages: 80
 
   - name: Fidelity
+    tier: target
     ats: workday
     tenant: fmr.wd1
     site: FidelityCareers
@@ -239,45 +275,56 @@ companies:
 
   # --- Phenom ---
   - name: AMD
+    tier: other
     ats: phenom
     domain: careers.amd.com
 
   # --- Amazon (dedicated JSON API) ---
   - name: Amazon
+    tier: faang
     ats: amazon
 
   # --- Playwright-powered (JS-rendered career pages) ---
   - name: Google
+    tier: faang
     ats: playwright
     slug: google
 
   - name: Apple
+    tier: faang
     ats: playwright
     slug: apple
 
   - name: Netflix
+    tier: faang
     ats: netflix
 
   - name: Meta
+    tier: faang
     ats: playwright
     slug: meta
 
   - name: Microsoft
+    tier: faang
     ats: playwright
     slug: microsoft
 
   - name: Uber
+    tier: faang
     ats: uber
 
   - name: DoorDash
+    tier: other
     ats: playwright
     slug: doordash
 
   - name: Goldman Sachs
+    tier: target
     ats: playwright
     slug: goldman_sachs
 
   - name: Intuit
+    tier: target
     ats: playwright
     slug: intuit
 
@@ -292,15 +339,18 @@ companies:
   #   slug: bloomberg
 
   - name: Tesla
+    tier: other
     ats: playwright
     slug: tesla
 
   - name: PayPal
+    tier: target
     ats: workday
     tenant: paypal.wd1
     site: jobs
 
   - name: Atlassian
+    tier: target
     ats: playwright
     slug: atlassian
 
@@ -323,6 +373,29 @@ notification:
   # Push notifications via ntfy.sh (optional — set JOBWATCH_NTFY_TOPIC env var or uncomment below)
   # ntfy_topic: your-secret-topic-name
   ntfy_server: https://ntfy.sh
+
+  # Tier routing: companies are tagged tier: target | faang | other.
+  # Each alerting tier sends its own tagged email and its own ntfy topic so
+  # the streams stay distinct on your phone. 'other' is inbox-only (no
+  # email, no push) — those roles still land in the workflow inbox.
+  # ntfy topic resolves from the first env var in the list that is set.
+  tiers:
+    target:
+      subject_tag: "🎯 TARGET"
+      ntfy_priority: "5"
+      ntfy_topic_env:
+        - JOBWATCH_NTFY_TOPIC_TARGET
+        - JOBWATCH_NTFY_TOPIC   # reuse the existing subscribed topic
+      alert: true
+    faang:
+      subject_tag: "🚀 FAANG"
+      ntfy_priority: "4"
+      ntfy_topic_env:
+        - JOBWATCH_NTFY_TOPIC_FAANG
+      alert: true
+    other:
+      subject_tag: "OTHER"
+      alert: false
 
 ranking:
   top_picks: 5

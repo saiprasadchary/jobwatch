@@ -215,18 +215,21 @@ def _build_html(new_jobs: list[dict], config: dict) -> str:
     return "\n".join(parts)
 
 
-def build_subject(new_jobs: list[dict], config: dict) -> str:
+def build_subject(new_jobs: list[dict], config: dict, subject_tag: str = "") -> str:
     notif = config.get("notification", {})
     subject_prefix = notif.get("subject_prefix", "").strip()
     subject = f"JobWatch: {len(new_jobs)} new role(s) found"
+    if subject_tag:
+        subject = f"{subject_tag} {subject}"
     if subject_prefix:
         subject = f"{subject_prefix} {subject}"
     return subject
 
 
-def _build_message(new_jobs: list[dict], config: dict, from_user: str, to_email: str) -> MIMEMultipart:
+def _build_message(new_jobs: list[dict], config: dict, from_user: str, to_email: str,
+                   subject_tag: str = "") -> MIMEMultipart:
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = build_subject(new_jobs, config)
+    msg["Subject"] = build_subject(new_jobs, config, subject_tag)
     msg["From"] = from_user
     msg["To"] = to_email
     msg["Date"] = formatdate(localtime=True)
@@ -321,7 +324,7 @@ def _promote_self_gmail_alert(msg: MIMEMultipart, from_user: str, from_pass: str
             pass
 
 
-def send_email(new_jobs: list[dict], config: dict) -> tuple[bool, str]:
+def send_email(new_jobs: list[dict], config: dict, subject_tag: str = "") -> tuple[bool, str]:
     notif = config.get("notification", {})
     from_user = os.environ.get("JOBWATCH_EMAIL_USER", "")
     from_pass = os.environ.get("JOBWATCH_EMAIL_PASSWORD", "")
@@ -335,7 +338,7 @@ def send_email(new_jobs: list[dict], config: dict) -> tuple[bool, str]:
     if not to_email or not from_user or not from_pass:
         return False, "Email not configured — set JOBWATCH_EMAIL_USER and JOBWATCH_EMAIL_PASSWORD env vars."
 
-    msg = _build_message(new_jobs, config, from_user, to_email)
+    msg = _build_message(new_jobs, config, from_user, to_email, subject_tag)
 
     with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
         server.starttls()
@@ -356,14 +359,21 @@ def send_email(new_jobs: list[dict], config: dict) -> tuple[bool, str]:
     return True, delivery_note
 
 
-def send_ntfy(email_jobs: list[dict], config: dict) -> None:
-    """Send a push notification via ntfy.sh (optional, best-effort)."""
+def send_ntfy(email_jobs: list[dict], config: dict, topic: str = "",
+              priority: str = "", title: str = "") -> None:
+    """Send a push notification via ntfy.sh (optional, best-effort).
+
+    ``topic``/``priority``/``title`` let a caller route a specific tier to its
+    own ntfy topic. When ``topic`` is empty it falls back to the legacy
+    single-topic config so existing single-stream setups keep working.
+    """
     try:
         import urllib.request
         import urllib.error
 
         notif = config.get("notification", {})
-        topic = notif.get("ntfy_topic") or os.environ.get("JOBWATCH_NTFY_TOPIC", "")
+        if not topic:
+            topic = notif.get("ntfy_topic") or os.environ.get("JOBWATCH_NTFY_TOPIC", "")
         if not topic:
             return
 
@@ -380,16 +390,20 @@ def send_ntfy(email_jobs: list[dict], config: dict) -> None:
             lines.append(f"... and {count - 5} more")
         body = "\n".join(lines)
 
-        # Determine priority based on rank bands
-        has_top = any(job.get("rank_band") == "Top" for job in email_jobs)
-        priority = "4" if has_top else "3"
+        if not priority:
+            # Determine priority based on rank bands
+            has_top = any(job.get("rank_band") == "Top" for job in email_jobs)
+            priority = "4" if has_top else "3"
+
+        if not title:
+            title = f"JobWatch: {count} new role(s)"
 
         # First job URL for the click action
         click_url = email_jobs[0].get("url", "") if email_jobs else ""
 
         url = f"{server.rstrip('/')}/{topic}"
         req = urllib.request.Request(url, data=body.encode("utf-8"), method="POST")
-        req.add_header("Title", f"JobWatch: {count} new role(s)")
+        req.add_header("Title", title)
         req.add_header("Priority", priority)
         req.add_header("Tags", "briefcase")
         if click_url:

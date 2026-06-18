@@ -330,6 +330,81 @@ def _select_email_jobs(jobs: list[dict], config: dict) -> list[dict]:
     return [job for job in jobs if str(job.get("rank_band", "")).strip() in email_bands]
 
 
+DEFAULT_TIER = "other"
+
+
+def _company_tier_map(config: dict) -> dict:
+    """Map company display name -> tier (target | faang | other)."""
+    mapping = {}
+    for company in config.get("companies", []):
+        name = company.get("name")
+        if name:
+            mapping[name] = str(company.get("tier", DEFAULT_TIER)).strip() or DEFAULT_TIER
+    return mapping
+
+
+def _tier_settings(config: dict) -> dict:
+    """Per-tier routing config from notification.tiers, with safe defaults."""
+    tiers = (config.get("notification", {}) or {}).get("tiers", {}) or {}
+    return tiers if isinstance(tiers, dict) else {}
+
+
+def _resolve_tier_topic(tier_cfg: dict) -> str:
+    """Resolve the first set env var in a tier's ntfy_topic_env list."""
+    envs = tier_cfg.get("ntfy_topic_env", [])
+    if isinstance(envs, str):
+        envs = [envs]
+    for env_name in envs:
+        value = os.environ.get(str(env_name), "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _route_email_jobs(pending_jobs: list[dict], config: dict) -> dict:
+    """Group alert-worthy jobs by tier, keeping only tiers with alert: true.
+
+    'other' (alert: false) is excluded — those roles still reach the workflow
+    inbox via record_batch, they just never email or push.
+    """
+    email_bands = _alerting_settings(config)["email_bands"]
+    tier_map = _company_tier_map(config)
+    tier_cfg = _tier_settings(config)
+    grouped: dict[str, list[dict]] = {}
+    for job in pending_jobs:
+        if str(job.get("rank_band", "")).strip() not in email_bands:
+            continue
+        tier = tier_map.get(job.get("company", ""), DEFAULT_TIER)
+        if not tier_cfg.get(tier, {}).get("alert", False):
+            continue
+        grouped.setdefault(tier, []).append(job)
+    return grouped
+
+
+def _deliver_tier(tier: str, jobs: list[dict], config: dict) -> tuple[bool, str]:
+    """Send one tier's tagged email and its own ntfy push.
+
+    Returns (sent, message). 'sent' reflects email delivery — push is
+    best-effort and never blocks marking the batch notified.
+    """
+    tier_cfg = _tier_settings(config).get(tier, {})
+    subject_tag = str(tier_cfg.get("subject_tag", tier.upper()))
+
+    sent, message = send_email(jobs, config, subject_tag=subject_tag)
+
+    if sent:
+        topic = _resolve_tier_topic(tier_cfg)
+        if topic:
+            send_ntfy(
+                jobs,
+                config,
+                topic=topic,
+                priority=str(tier_cfg.get("ntfy_priority", "")),
+                title=f"{subject_tag} {len(jobs)} new role(s)",
+            )
+    return sent, message
+
+
 def cmd_run(args):
     config = load_config()
     keywords = config.get("keywords", [])
@@ -387,54 +462,51 @@ def cmd_run(args):
         pending_ids = [job["job_id"] for job in pending_jobs]
         mark_jobs_pending_notification(pending_ids)
 
-        email_jobs = _select_email_jobs(pending_jobs, config)
-        subject = build_subject(email_jobs or pending_jobs, config)
+        # Route alert-worthy roles into per-tier streams (target / faang).
+        # Each tier delivers independently: a failure in one tier resets only
+        # that tier's job ids for retry, the rest are marked notified. Roles
+        # not in an alerting tier ('other') reach the workflow inbox below.
+        tier_groups = _route_email_jobs(pending_jobs, config)
+        failed_ids: set[str] = set()
+        delivered_summaries: list[str] = []
 
-        # The try block wraps ONLY the send. Once send_email reports success
-        # the delivery is irrevocable — bookkeeping failures after that must
-        # never reset pending state or fail the run, or the same batch gets
-        # re-sent on the next run.
-        failure_status = "pending_delivery"
-        try:
-            if email_jobs:
-                sent, delivery_message = send_email(email_jobs, config)
+        for tier, jobs in tier_groups.items():
+            # Each send is isolated. Once send_email reports success the
+            # delivery is irrevocable, so a later tier's failure (or any
+            # bookkeeping error) must never reset an already-delivered tier.
+            try:
+                sent, message = _deliver_tier(tier, jobs, config)
+            except Exception as e:
+                sent, message = False, f"Email failed: {e}"
+
+            if sent:
+                delivered_summaries.append(f"{tier}: {message}")
             else:
-                sent = True
-                delivery_message = "No instant-alert tier roles this run; pending roles were archived in the workflow inbox."
+                failed_ids.update(job["job_id"] for job in jobs)
+                delivery_error = message
+                print(f"\n[{tier}] {message}")
+
+        notified_ids = [jid for jid in pending_ids if jid not in failed_ids]
+        if notified_ids:
+            mark_jobs_notified(notified_ids)
+        if failed_ids:
+            reset_pending_notifications(list(failed_ids))
+
+        try:
+            record_batch(
+                status="pending_delivery" if failed_ids else "sent",
+                jobs=pending_jobs,
+                recipient=recipient,
+                subject=build_subject(pending_jobs, config),
+                error=delivery_error,
+            )
         except Exception as e:
-            sent = False
-            delivery_message = f"Email failed: {e}"
-            failure_status = "delivery_failed"
+            print(f"\nWARNING: workflow inbox bookkeeping failed: {e}")
 
-        if sent:
-            mark_jobs_notified(pending_ids)
-            try:
-                record_batch(
-                    status="sent" if email_jobs else "inbox_only",
-                    jobs=pending_jobs,
-                    recipient=recipient,
-                    subject=subject,
-                )
-            except Exception as e:
-                print(f"\nWARNING: workflow inbox bookkeeping failed (alerts were already delivered): {e}")
-            print(f"\n{delivery_message}")
-        else:
-            delivery_error = delivery_message
-            reset_pending_notifications(pending_ids)
-            try:
-                record_batch(
-                    status=failure_status,
-                    jobs=pending_jobs,
-                    recipient=recipient,
-                    subject=subject,
-                    error=delivery_error,
-                )
-            except Exception as e:
-                print(f"\nWARNING: failed to record delivery-failure batch: {e}")
-            print(f"\n{delivery_error}")
-
-        if email_jobs:
-            send_ntfy(email_jobs, config)
+        if delivered_summaries:
+            print("\n" + "\n".join(delivered_summaries))
+        elif not tier_groups:
+            print("\nNo instant-alert tier roles this run; pending roles were archived in the workflow inbox.")
 
     inbox_path = render_inbox(config=config)
     print(f"\nWorkflow inbox updated: {inbox_path}")

@@ -177,6 +177,8 @@ jobs:
           JOBWATCH_EMAIL_USER: ${{ secrets.JOBWATCH_EMAIL_USER }}
           JOBWATCH_EMAIL_PASSWORD: ${{ secrets.JOBWATCH_EMAIL_PASSWORD }}
           JOBWATCH_NTFY_TOPIC: ${{ secrets.JOBWATCH_NTFY_TOPIC }}
+          JOBWATCH_NTFY_TOPIC_TARGET: ${{ secrets.JOBWATCH_NTFY_TOPIC_TARGET }}
+          JOBWATCH_NTFY_TOPIC_FAANG: ${{ secrets.JOBWATCH_NTFY_TOPIC_FAANG }}
         run: python jobwatch.py run --lane "${{ steps.lane.outputs.lane }}"
 
       - name: Encrypt JobWatch state
