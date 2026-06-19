@@ -85,6 +85,44 @@ class PendingNotificationTests(unittest.TestCase):
                 self.assertEqual(store.reset_pending_notifications([]), 0)
 
 
+class DedupTests(unittest.TestCase):
+    def test_same_job_id_collapsed_within_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "jobwatch.db"
+            with patch.object(store, "DB_PATH", db_path):
+                pending = store.sync_jobs([_job("dup"), _job("dup")])
+            self.assertEqual(len(pending), 1)
+
+    def test_same_url_different_id_collapsed_within_run(self) -> None:
+        # Same posting re-listed under two job_ids in one scrape -> one alert.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "jobwatch.db"
+            with patch.object(store, "DB_PATH", db_path):
+                a = _job("id-a", url="https://co.com/jobs/req123")
+                b = _job("id-b", url="https://co.com/jobs/req123")
+                pending = store.sync_jobs([a, b])
+            self.assertEqual([j["job_id"] for j in pending], ["id-a"])
+
+    def test_churned_id_same_url_not_realerted_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "jobwatch.db"
+            with patch.object(store, "DB_PATH", db_path):
+                run1 = store.sync_jobs([_job("old-id", url="https://co.com/jobs/req9")])
+                self.assertEqual([j["job_id"] for j in run1], ["old-id"])
+                store.mark_jobs_notified(["old-id"])
+                # Next run: same posting, new id -> must NOT alert again.
+                run2 = store.sync_jobs([_job("new-id", url="https://co.com/jobs/req9")])
+                self.assertEqual(run2, [])
+
+    def test_empty_urls_are_not_collapsed(self) -> None:
+        # Jobs without a URL must each survive on their own job_id.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "jobwatch.db"
+            with patch.object(store, "DB_PATH", db_path):
+                pending = store.sync_jobs([_job("a", url=""), _job("b", url="")])
+            self.assertEqual({j["job_id"] for j in pending}, {"a", "b"})
+
+
 class RetentionCleanupTests(unittest.TestCase):
     def _backdate(self, db_path: Path, job_id: str, days: int) -> None:
         old = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

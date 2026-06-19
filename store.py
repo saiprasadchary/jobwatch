@@ -32,6 +32,8 @@ def _ensure_seen_jobs_schema(conn: sqlite3.Connection) -> None:
             added.add(name)
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_jobs_notified_at ON seen_jobs(notified_at)")
+    # Supports the cross-run URL dedup in sync_jobs (same posting, churned id).
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_jobs_url ON seen_jobs(url)")
 
     # Backfill legacy rows once when migrating older databases to the new schema.
     if "last_seen" in added:
@@ -147,6 +149,7 @@ def sync_jobs(jobs: list[dict]) -> list[dict]:
         cur = conn.cursor()
         pending = []
         seen_job_ids: set[str] = set()
+        seen_urls: set[str] = set()
         now = datetime.now(timezone.utc).isoformat()
 
         for job in jobs:
@@ -161,12 +164,36 @@ def sync_jobs(jobs: list[dict]) -> list[dict]:
             source = job.get("source", "")
             salary = job.get("salary", "")
 
+            # URL is a per-posting key. If the same URL shows up twice in one
+            # scrape under different job_ids (pagination overlap, or the same
+            # role re-listed), keep only the first — it's one posting, one alert.
+            if url:
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
             cur.execute(
                 "SELECT first_seen, notified_at, posted_at, status FROM seen_jobs WHERE job_id = ?",
                 (job_id,),
             )
             existing = cur.fetchone()
             if existing is None:
+                # Cross-run guard: if this posting's URL is already tracked
+                # under a different (churned) job_id, don't insert a second row
+                # or re-alert — just refresh the existing row so retention keeps
+                # it alive.
+                if url:
+                    cur.execute(
+                        "SELECT job_id FROM seen_jobs WHERE url = ? AND job_id != ? LIMIT 1",
+                        (url, job_id),
+                    )
+                    url_match = cur.fetchone()
+                    if url_match is not None:
+                        cur.execute(
+                            "UPDATE seen_jobs SET last_seen = ? WHERE job_id = ?",
+                            (now, url_match[0]),
+                        )
+                        continue
                 pending.append({**job, "first_seen": now, "last_seen": now})
                 cur.execute(
                     """
