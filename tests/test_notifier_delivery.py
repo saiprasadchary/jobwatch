@@ -315,6 +315,35 @@ class NtfyTests(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=OSError("network down")):
             notifier.send_ntfy([self._job()], self._config())  # must not raise
 
+    def test_emoji_title_does_not_break_push(self) -> None:
+        # HTTP headers are latin-1; an emoji tier tag in the Title must be
+        # stripped, not raise (regression: 🚀 broke the FAANG push live).
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["request"] = request
+
+            class _Resp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return None
+
+            return _Resp()
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            notifier.send_ntfy(
+                [self._job()], self._config(),
+                topic="faang-topic", priority="4", title="🚀 FAANG 1 new role(s)",
+            )
+
+        request = captured["request"]
+        self.assertIn("faang-topic", request.full_url)
+        title = request.get_header("Title")
+        self.assertIn("FAANG", title)
+        title.encode("latin-1")  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -401,13 +401,19 @@ def send_ntfy(email_jobs: list[dict], config: dict, topic: str = "",
         # First job URL for the click action
         click_url = email_jobs[0].get("url", "") if email_jobs else ""
 
+        # HTTP headers are latin-1 only — strip emoji/non-latin-1 (e.g. the
+        # 🎯/🚀 tier tags) from the Title or urllib raises and the push is
+        # lost. The message body is sent as UTF-8 bytes, so it keeps emoji.
+        def _header_safe(value: str) -> str:
+            return value.encode("latin-1", "ignore").decode("latin-1").strip()
+
         url = f"{server.rstrip('/')}/{topic}"
         req = urllib.request.Request(url, data=body.encode("utf-8"), method="POST")
-        req.add_header("Title", title)
+        req.add_header("Title", _header_safe(title) or "JobWatch")
         req.add_header("Priority", priority)
         req.add_header("Tags", "briefcase")
         if click_url:
-            req.add_header("Click", click_url)
+            req.add_header("Click", _header_safe(click_url))
 
         urllib.request.urlopen(req, timeout=10)
         print(f"  ntfy push sent to {topic} ({count} job(s))")
