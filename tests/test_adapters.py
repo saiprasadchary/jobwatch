@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adapters import ashby, greenhouse, lever, netflix, oleeo, phenom, talentbrew, uber
+from adapters import workday
 
 
 class FakeResponse:
@@ -233,6 +234,55 @@ class TalentBrewTests(unittest.TestCase):
             talentbrew.fetch_talentbrew({"name": "Arm", "domain": "careers.arm.com"})
 
         self.assertEqual(calls["n"], talentbrew.MAX_PAGES)
+
+
+class WorkdayTimeBudgetTests(unittest.TestCase):
+    def _page(self, start: int, n: int = 20, total: int = 1000):
+        return {
+            "total": total,
+            "jobPostings": [
+                {
+                    "title": f"Software Engineer {start + i}",
+                    "locationsText": "Austin, TX",
+                    "externalPath": f"/job/{start + i}",
+                    "postedOn": "Posted Today",
+                    "bulletFields": [],
+                }
+                for i in range(n)
+            ],
+        }
+
+    def test_time_budget_returns_partial_instead_of_timing_out(self) -> None:
+        # Simulate a huge board: every page is full, total far exceeds what
+        # the budget allows. A fake clock trips the budget after 3 pages.
+        company = {"name": "Salesforce", "tenant": "salesforce.wd12",
+                   "site": "External_Career_Site", "max_pages": 80}
+
+        offsets = {"n": 0}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            page = self._page(json["offset"])
+            offsets["n"] += 1
+            return FakeResponse(page)
+
+        clock = {"t": 0.0}
+
+        def fake_monotonic():
+            # advance 50s of virtual time per call so we cross 110s after a
+            # few pages
+            clock["t"] += 50.0
+            return clock["t"]
+
+        with patch.object(workday.requests, "post", side_effect=fake_post), patch.object(
+            workday.time, "monotonic", side_effect=fake_monotonic
+        ):
+            jobs = workday.fetch_workday(company)
+
+        # Returned the jobs it managed to fetch (non-zero), did not raise.
+        self.assertGreater(len(jobs), 0)
+        # Stopped well before max_pages * 20 jobs.
+        self.assertLess(len(jobs), 80 * 20)
+        self.assertTrue(all(j["job_id"].startswith("wd-salesforce-") for j in jobs))
 
 
 if __name__ == "__main__":

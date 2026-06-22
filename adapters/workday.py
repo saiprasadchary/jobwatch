@@ -1,4 +1,6 @@
 import re
+import time
+
 import requests
 
 CXS_URL = "https://{tenant}.myworkdayjobs.com/wday/cxs/{company}/{site}/jobs"
@@ -6,6 +8,11 @@ DETAIL_URL = "https://{tenant}.myworkdayjobs.com/wday/cxs/{company}/{site}{path}
 
 _MULTI_LOC_RE = re.compile(r"^\d+ Locations?$", re.IGNORECASE)
 DEFAULT_MAX_PAGES = 25
+# Stop paginating before the lane's hard per-source timeout (fast=150s,
+# browser=210s) so a huge board returns the jobs it has instead of being
+# killed with zero. Large enterprise boards (1400+ jobs) plus per-job
+# location-resolution calls used to blow the budget and return nothing.
+DEFAULT_TIME_BUDGET_SECONDS = 110
 
 
 def _resolve_locations(tenant: str, company_slug: str, site: str, external_path: str) -> str:
@@ -29,6 +36,14 @@ def _max_pages(company: dict) -> int:
     return value if value > 0 else DEFAULT_MAX_PAGES
 
 
+def _time_budget(company: dict) -> float:
+    try:
+        value = float(company.get("time_budget_seconds", DEFAULT_TIME_BUDGET_SECONDS))
+    except (TypeError, ValueError):
+        value = DEFAULT_TIME_BUDGET_SECONDS
+    return value if value > 0 else DEFAULT_TIME_BUDGET_SECONDS
+
+
 def fetch_workday(company: dict) -> list[dict]:
     tenant = company["tenant"]
     company_slug = tenant.split(".")[0]
@@ -42,9 +57,15 @@ def fetch_workday(company: dict) -> list[dict]:
     limit = 20
     expected_total = None
     max_pages = _max_pages(company)
+    time_budget = _time_budget(company)
+    start = time.monotonic()
+    truncated_by_time = False
     pages = 0
 
     while pages < max_pages:
+        if time.monotonic() - start > time_budget:
+            truncated_by_time = True
+            break
         payload = {
             "appliedFacets": {},
             "limit": limit,
@@ -78,7 +99,15 @@ def fetch_workday(company: dict) -> list[dict]:
             seen_job_ids.add(job_key)
             added_this_page += 1
 
-            if _MULTI_LOC_RE.match(location) and external_path:
+            # Resolving "N Locations" costs an extra HTTP round-trip per job.
+            # Once we're over budget, stop resolving so we keep returning the
+            # remaining jobs quickly rather than burning the budget on detail
+            # fetches (the raw "N Locations" text is left in place).
+            if (
+                _MULTI_LOC_RE.match(location)
+                and external_path
+                and time.monotonic() - start <= time_budget
+            ):
                 location = _resolve_locations(tenant, company_slug, site, external_path)
 
             bullet_fields = j.get("bulletFields", [])
@@ -104,12 +133,18 @@ def fetch_workday(company: dict) -> list[dict]:
             break
         offset += limit
         pages += 1
-    else:
-        if expected_total and len(seen_job_ids) < expected_total:
-            print(
-                f"  WARNING: {company['name']} workday board truncated at "
-                f"{len(seen_job_ids)}/{expected_total} jobs (max_pages={max_pages}); "
-                "set max_pages in config.yaml to raise the cap."
-            )
+
+    if truncated_by_time and expected_total and len(seen_job_ids) < expected_total:
+        print(
+            f"  NOTE: {company['name']} workday board returned "
+            f"{len(seen_job_ids)}/{expected_total} jobs (hit {time_budget:.0f}s "
+            "time budget); remaining pages skipped to stay within the lane timeout."
+        )
+    elif expected_total and len(seen_job_ids) < expected_total and pages >= max_pages:
+        print(
+            f"  WARNING: {company['name']} workday board truncated at "
+            f"{len(seen_job_ids)}/{expected_total} jobs (max_pages={max_pages}); "
+            "set max_pages in config.yaml to raise the cap."
+        )
 
     return jobs
