@@ -97,6 +97,19 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn("target", grouped)
         self.assertIn("faang", grouped)
 
+    def test_other_fires_when_alert_enabled(self) -> None:
+        # When 'other' has alert: true it routes like any other tier.
+        cfg = {**CONFIG, "notification": {"tiers": {
+            **CONFIG["notification"]["tiers"],
+            "other": {"subject_tag": "📋 OTHER", "ntfy_priority": "3",
+                      "ntfy_topic_env": ["JOBWATCH_NTFY_TOPIC_OTHER"], "alert": True},
+        }}}
+        jobs = [_job("Salesforce"), _job("Amazon"), _job("Reddit"), _job("Legacy")]
+        grouped = jobwatch._route_email_jobs(jobs, cfg)
+        self.assertEqual(set(grouped.keys()), {"target", "faang", "other"})
+        # Reddit (explicit other) and Legacy (default other) both land in other.
+        self.assertEqual({j["company"] for j in grouped["other"]}, {"Reddit", "Legacy"})
+
 
 class TierDeliveryTests(unittest.TestCase):
     def test_deliver_tier_tags_subject_and_routes_topic(self) -> None:

@@ -179,6 +179,7 @@ jobs:
           JOBWATCH_NTFY_TOPIC: ${{ secrets.JOBWATCH_NTFY_TOPIC }}
           JOBWATCH_NTFY_TOPIC_TARGET: ${{ secrets.JOBWATCH_NTFY_TOPIC_TARGET }}
           JOBWATCH_NTFY_TOPIC_FAANG: ${{ secrets.JOBWATCH_NTFY_TOPIC_FAANG }}
+          JOBWATCH_NTFY_TOPIC_OTHER: ${{ secrets.JOBWATCH_NTFY_TOPIC_OTHER }}
         run: python jobwatch.py run --lane "${{ steps.lane.outputs.lane }}"
 
       - name: Encrypt JobWatch state

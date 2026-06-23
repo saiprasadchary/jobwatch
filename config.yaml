@@ -394,8 +394,11 @@ notification:
         - JOBWATCH_NTFY_TOPIC_FAANG
       alert: true
     other:
-      subject_tag: "OTHER"
-      alert: false
+      subject_tag: "📋 OTHER"
+      ntfy_priority: "3"
+      ntfy_topic_env:
+        - JOBWATCH_NTFY_TOPIC_OTHER
+      alert: true
 
 ranking:
   top_picks: 5
