@@ -279,6 +279,11 @@ companies:
     ats: phenom
     domain: careers.amd.com
 
+  - name: Rivian
+    tier: target
+    ats: phenom
+    domain: careers.rivian.com
+
   # --- Amazon (dedicated JSON API) ---
   - name: Amazon
     tier: faang

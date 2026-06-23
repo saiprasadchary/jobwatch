@@ -175,9 +175,29 @@ class PhenomTests(unittest.TestCase):
 
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
-        self.assertEqual(job["job_id"], "ph-careers-JR100")
+        self.assertEqual(job["job_id"], "ph-careers.amd.com-JR100")
         self.assertEqual(job["location"], "Santa Clara, California, United States")
         self.assertIn("jr100-software-engineer-ii", job["url"])
+
+    def test_job_id_does_not_collide_across_careers_domains(self) -> None:
+        # AMD (careers.amd.com) and Rivian (careers.rivian.com) share a req_id;
+        # the full-domain prefix must keep their job_ids distinct.
+        job_page = {"jobs": [{"data": {"title": "Software Engineer", "city": "Austin",
+                                       "state": "TX", "country": "United States",
+                                       "req_id": "12345", "slug": "12345",
+                                       "postedDate": "2026-06-22T00:00:00Z",
+                                       "description": ""}}]}
+
+        def one_page(*a, **k):
+            # page 1 returns the job, page 2 is empty so pagination stops
+            return FakeResponse(job_page if k.get("params", {}).get("page") == 1 else {"jobs": []})
+
+        with patch.object(phenom.requests, "get", side_effect=one_page):
+            amd = phenom.fetch_phenom({"name": "AMD", "domain": "careers.amd.com"})[0]
+            rivian = phenom.fetch_phenom({"name": "Rivian", "domain": "careers.rivian.com"})[0]
+        self.assertNotEqual(amd["job_id"], rivian["job_id"])
+        self.assertEqual(amd["job_id"], "ph-careers.amd.com-12345")
+        self.assertEqual(rivian["job_id"], "ph-careers.rivian.com-12345")
 
 
 class OleeoTests(unittest.TestCase):

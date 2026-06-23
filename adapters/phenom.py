@@ -52,7 +52,10 @@ def fetch_phenom(company: dict) -> list[dict]:
                     salary = m.group(0).strip()
 
             jobs.append({
-                "job_id": f"ph-{domain.split('.')[0]}-{req_id}",
+                # Full domain (not domain.split('.')[0]) so two phenom boards
+                # both at careers.<co>.com don't share the "ph-careers-" prefix
+                # and collide on req_id (e.g. AMD vs Rivian).
+                "job_id": f"ph-{domain}-{req_id}",
                 "company": company_name,
                 "title": title,
                 "location": location,
