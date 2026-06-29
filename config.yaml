@@ -191,7 +191,7 @@ companies:
     slug: lyft
 
   - name: Airbnb
-    tier: other
+    tier: target
     ats: greenhouse
     slug: airbnb
 
