@@ -100,9 +100,18 @@ jobs:
           key: ${{ steps.h1b-key.outputs.key }}
 
       - name: Build H-1B sponsor DB if not cached
-        if: steps.h1b-cache.outputs.cache-hit != 'true'
+        if: steps.h1b-key.outputs.found == '1' && steps.h1b-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: |
           curl -L -o /tmp/lca.xlsx "${{ steps.h1b-key.outputs.url }}"
+          # DOL occasionally serves a small HTML error stub with HTTP 200; a
+          # real LCA workbook is >100 MB. Skip (don't fail the run) if the
+          # download isn't a plausible xlsx.
+          size=$(wc -c < /tmp/lca.xlsx)
+          if [ "$size" -lt 1000000 ]; then
+            echo "H-1B download was only ${size} bytes (not a valid xlsx); skipping sponsor DB build."
+            exit 0
+          fi
           python3 << 'PYEOF'
           import openpyxl, sqlite3
           import re
